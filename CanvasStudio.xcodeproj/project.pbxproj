@@ -1,0 +1,49 @@
+// !$*UTF8*$!
+{archiveVersion = 1; classes = {}; objectVersion = 77; objects = {
+A100 = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2700; TargetAttributes = {A200 = {CreatedOnToolsVersion = 27.2; }; }; }; buildConfigurationList = A300; compatibilityVersion = "Xcode 16.0"; developmentRegion = en; knownRegions = (en, Base); mainGroup = A400; productRefGroup = A401; projectDirPath = ""; projectRoot = ""; targets = (A200, B200, C200); };
+A400 = {isa = PBXGroup; children = (A402, B400, A401); sourceTree = "<group>"; };
+A402 = {isa = PBXFileSystemSynchronizedRootGroup; path = CanvasStudio; sourceTree = "<group>"; };
+A401 = {isa = PBXGroup; children = (A403, B403, C403); name = Products; sourceTree = "<group>"; };
+A403 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CanvasStudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
+A200 = {isa = PBXNativeTarget; buildConfigurationList = A301; buildPhases = (A500,A501,A502); buildRules = (); dependencies = (); fileSystemSynchronizedGroups = (A402); name = CanvasStudio; packageProductDependencies = (); productName = CanvasStudio; productReference = A403; productType = "com.apple.product-type.application"; };
+A500 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+A501 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+A502 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+A300 = {isa = XCConfigurationList; buildConfigurations = (A600,A601); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+A301 = {isa = XCConfigurationList; buildConfigurations = (A602,A603); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+A600 = {isa = XCBuildConfiguration; buildSettings = {SDKROOT = iphoneos; CLANG_ENABLE_MODULES = YES; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 18.0; DEBUG_INFORMATION_FORMAT = dwarf; }; name = Debug; };
+A601 = {isa = XCBuildConfiguration; buildSettings = {SDKROOT = iphoneos; CLANG_ENABLE_MODULES = YES; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 18.0; }; name = Release; };
+A602 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = org.madhacks.CanvasStudio; CODE_SIGN_STYLE = Automatic; INFOPLIST_FILE = Info.plist; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; ENABLE_TESTABILITY = YES; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; SUPPORTS_MACCATALYST = YES; }; name = Debug; };
+A603 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = org.madhacks.CanvasStudio; CODE_SIGN_STYLE = Automatic; INFOPLIST_FILE = Info.plist; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_OPTIMIZATION_LEVEL = "-O"; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; SUPPORTS_MACCATALYST = YES; }; name = Release; };
+
+B400 = {isa = PBXGroup; children = (B410,B411,B412,C400); path = Tests; sourceTree = "<group>"; };
+B410 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreTests.swift; sourceTree = "<group>"; };
+B411 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasRendererTests.swift; sourceTree = "<group>"; };
+B412 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceLifecycleTests.swift; sourceTree = "<group>"; };
+C400 = {isa = PBXGroup; children = (C410); path = UI; sourceTree = "<group>"; };
+C410 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasStudioUITests.swift; sourceTree = "<group>"; };
+B420 = {isa = PBXBuildFile; fileRef = B410; };
+B421 = {isa = PBXBuildFile; fileRef = B411; };
+B422 = {isa = PBXBuildFile; fileRef = B412; };
+C420 = {isa = PBXBuildFile; fileRef = C410; };
+B403 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CanvasStudioTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+C403 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CanvasStudioUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+B200 = {isa = PBXNativeTarget; buildConfigurationList = B300; buildPhases = (B500,B501,B502); buildRules = (); dependencies = (B701); name = CanvasStudioTests; productName = CanvasStudioTests; productReference = B403; productType = "com.apple.product-type.bundle.unit-test"; };
+C200 = {isa = PBXNativeTarget; buildConfigurationList = C300; buildPhases = (C500,C501,C502); buildRules = (); dependencies = (C701); name = CanvasStudioUITests; productName = CanvasStudioUITests; productReference = C403; productType = "com.apple.product-type.bundle.ui-testing"; };
+B500 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B420,B421,B422); runOnlyForDeploymentPostprocessing = 0; };
+B501 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+B502 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+C500 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (C420); runOnlyForDeploymentPostprocessing = 0; };
+C501 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+C502 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+B700 = {isa = PBXContainerItemProxy; containerPortal = A100; proxyType = 1; remoteGlobalIDString = A200; remoteInfo = CanvasStudio; };
+C700 = {isa = PBXContainerItemProxy; containerPortal = A100; proxyType = 1; remoteGlobalIDString = A200; remoteInfo = CanvasStudio; };
+B701 = {isa = PBXTargetDependency; target = A200; targetProxy = B700; };
+C701 = {isa = PBXTargetDependency; target = A200; targetProxy = C700; };
+B300 = {isa = XCConfigurationList; buildConfigurations = (B600,B601); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+C300 = {isa = XCConfigurationList; buildConfigurations = (C600,C601); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+B600 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = org.madhacks.CanvasStudioTests; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; BUNDLE_LOADER = "$(TEST_HOST)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CanvasStudio.app/CanvasStudio"; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks","@loader_path/Frameworks"); }; name = Debug; };
+B601 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = org.madhacks.CanvasStudioTests; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; TARGETED_DEVICE_FAMILY = "1,2"; BUNDLE_LOADER = "$(TEST_HOST)"; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CanvasStudio.app/CanvasStudio"; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks","@loader_path/Frameworks"); }; name = Release; };
+C600 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = org.madhacks.CanvasStudioUITests; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; TEST_TARGET_NAME = CanvasStudio; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks","@loader_path/Frameworks"); }; name = Debug; };
+C601 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = org.madhacks.CanvasStudioUITests; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; TARGETED_DEVICE_FAMILY = "1,2"; TEST_TARGET_NAME = CanvasStudio; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)","@executable_path/Frameworks","@loader_path/Frameworks"); }; name = Release; };
+}; rootObject = A100; }

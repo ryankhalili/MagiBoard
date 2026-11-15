@@ -1,0 +1,5 @@
+.protocol/
+__pycache__/
+*.canvaspair
+*.log
+.state/
