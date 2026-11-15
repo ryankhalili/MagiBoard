@@ -15,6 +15,45 @@ struct CanvasRect: Codable, Equatable {
     }
 }
 
+struct PropertyChoice: Codable, Equatable {
+    var label: String
+    var value: Double
+}
+
+struct ObjectPropertySpec: Codable, Equatable, Identifiable {
+    var key: String
+    var label: String
+    var control: String = "number"
+    var min: Double?
+    var max: Double?
+    var step: Double?
+    var unit: String = ""
+    var choices: [PropertyChoice] = []
+    var id: String { key }
+    init(key: String, label: String, control: String = "number", min: Double? = nil, max: Double? = nil,
+         step: Double? = nil, unit: String = "", choices: [PropertyChoice] = []) {
+        self.key = key; self.label = label; self.control = control; self.min = min; self.max = max
+        self.step = step; self.unit = unit; self.choices = choices
+    }
+    enum CodingKeys: String, CodingKey { case key, label, control, min, max, step, unit, choices }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        key = try c.decode(String.self, forKey: .key)
+        label = try c.decodeIfPresent(String.self, forKey: .label) ?? key
+        control = try c.decodeIfPresent(String.self, forKey: .control) ?? "number"
+        min = try c.decodeIfPresent(Double.self, forKey: .min); max = try c.decodeIfPresent(Double.self, forKey: .max)
+        step = try c.decodeIfPresent(Double.self, forKey: .step)
+        unit = try c.decodeIfPresent(String.self, forKey: .unit) ?? ""
+        choices = try c.decodeIfPresent([PropertyChoice].self, forKey: .choices) ?? []
+    }
+}
+
+struct CanvasTaskRegion: Identifiable, Equatable {
+    var id: UUID
+    var rect: CanvasRect
+    var label: String
+}
+
 struct CanvasObject: Codable, Equatable, Identifiable {
     var id: UUID
     var kind: String
@@ -26,6 +65,7 @@ struct CanvasObject: Codable, Equatable, Identifiable {
     var color: String
     var text: String
     var properties: [String: Double]
+    var propertySpecs: [ObjectPropertySpec]
     var code: String
     var imageData: Data?
     var shape: String
@@ -35,15 +75,15 @@ struct CanvasObject: Codable, Equatable, Identifiable {
     init(id: UUID = UUID(), kind: String = "shape", title: String = "Object", x: Double = 160, y: Double = 160,
          width: Double = 260, height: Double = 200, color: String = "#2563EB", text: String = "",
          properties: [String: Double] = [:], code: String = "", imageData: Data? = nil,
-         shape: String = "rectangle", pattern: String = "solid") {
+         shape: String = "rectangle", pattern: String = "solid", propertySpecs: [ObjectPropertySpec] = []) {
         self.id = id; self.kind = kind; self.title = title; self.x = x; self.y = y
         self.width = width; self.height = height; self.color = color; self.text = text
         self.properties = properties; self.code = code; self.imageData = imageData
-        self.shape = shape; self.pattern = pattern
+        self.shape = shape; self.pattern = pattern; self.propertySpecs = propertySpecs
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, title, x, y, width, height, color, text, properties, code, imageData, shape, pattern
+        case id, kind, title, x, y, width, height, color, text, properties, propertySpecs, code, imageData, shape, pattern
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -57,6 +97,7 @@ struct CanvasObject: Codable, Equatable, Identifiable {
         color = try c.decodeIfPresent(String.self, forKey: .color) ?? "#2563EB"
         text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
         properties = try c.decodeIfPresent([String: Double].self, forKey: .properties) ?? [:]
+        propertySpecs = try c.decodeIfPresent([ObjectPropertySpec].self, forKey: .propertySpecs) ?? []
         code = try c.decodeIfPresent(String.self, forKey: .code) ?? ""
         imageData = try c.decodeIfPresent(Data.self, forKey: .imageData)
         shape = try c.decodeIfPresent(String.self, forKey: .shape) ?? "rectangle"
@@ -139,6 +180,7 @@ struct StudioSettings: Codable, Equatable {
     var paperStyle = "dots"
     var toolbarCollapsed = false
     var compactHeader = false
+    var magicOnboardingSeen = false
     var voiceMode = false
     var spokenReplies = true
     var speechLocale = "en-US"
@@ -146,7 +188,7 @@ struct StudioSettings: Codable, Equatable {
     var bridgeToken = ""
     // The pairing secret lives in Keychain, never in notebook or settings JSON.
     enum CodingKeys: String, CodingKey {
-        case aiEnabled, darkMode, drawWithFinger, recognizeShapes, showGrid, paperStyle, toolbarCollapsed, compactHeader, voiceMode, spokenReplies, speechLocale, bridgeURL
+        case aiEnabled, darkMode, drawWithFinger, recognizeShapes, showGrid, paperStyle, toolbarCollapsed, compactHeader, magicOnboardingSeen, voiceMode, spokenReplies, speechLocale, bridgeURL
     }
     init() {}
     init(from decoder: Decoder) throws {
@@ -159,6 +201,7 @@ struct StudioSettings: Codable, Equatable {
         paperStyle = try c.decodeIfPresent(String.self, forKey: .paperStyle) ?? "dots"
         toolbarCollapsed = try c.decodeIfPresent(Bool.self, forKey: .toolbarCollapsed) ?? false
         compactHeader = try c.decodeIfPresent(Bool.self, forKey: .compactHeader) ?? false
+        magicOnboardingSeen = try c.decodeIfPresent(Bool.self, forKey: .magicOnboardingSeen) ?? false
         voiceMode = try c.decodeIfPresent(Bool.self, forKey: .voiceMode) ?? false
         spokenReplies = try c.decodeIfPresent(Bool.self, forKey: .spokenReplies) ?? true
         speechLocale = try c.decodeIfPresent(String.self, forKey: .speechLocale) ?? "en-US"
@@ -198,6 +241,31 @@ enum NotebookValidation {
         }
         guard object.properties.count <= 128, object.properties.values.allSatisfy({ $0.isFinite && abs($0) <= 1_000_000_000 }) else {
             throw NotebookError.invalid("An object has invalid properties.")
+        }
+        guard object.propertySpecs.count <= 64, Set(object.propertySpecs.map(\.key)).count == object.propertySpecs.count else {
+            throw NotebookError.invalid("Property controls must have unique names.")
+        }
+        for spec in object.propertySpecs {
+            guard let value = object.properties[spec.key], !spec.key.isEmpty, spec.key.count <= 80, spec.label.count <= 200,
+                  ["number", "slider", "toggle", "choice"].contains(spec.control), spec.unit.count <= 40,
+                  [spec.min, spec.max, spec.step].compactMap({ $0 }).allSatisfy({ $0.isFinite && abs($0) <= 1_000_000_000 }),
+                  spec.step.map({ $0 >= 0.000000001 }) ?? true, spec.choices.count <= 40,
+                  spec.choices.allSatisfy({ $0.value.isFinite && abs($0.value) <= 1_000_000_000 && $0.label.count <= 200 }) else {
+                throw NotebookError.invalid("An exposed property control is invalid.")
+            }
+            if let lo = spec.min, let hi = spec.max, lo >= hi { throw NotebookError.invalid("A property range must increase.") }
+            if (spec.min.map { value < $0 } ?? false) || (spec.max.map { value > $0 } ?? false) {
+                throw NotebookError.invalid("A property value lies outside its declared control range.")
+            }
+            if spec.control == "slider", spec.min == nil || spec.max == nil || spec.step == nil {
+                throw NotebookError.invalid("A slider needs minimum, maximum, and positive step values.")
+            }
+            if spec.control == "toggle", value != 0 && value != 1 {
+                throw NotebookError.invalid("Toggle properties must be zero or one.")
+            }
+            if spec.control == "choice", !spec.choices.contains(where: { $0.value == value }) {
+                throw NotebookError.invalid("A choice property must use a declared choice value.")
+            }
         }
         if object.kind == "shape", object.shape == "triangle" {
             let a = object.properties["angleA"] ?? 49
@@ -286,8 +354,9 @@ enum LocalAssistant {
             object = CanvasObject(kind: "shape", title: circle ? "Circle" : "Rectangle", x: point.x, y: point.y, width: 220, height: 220,
                                   color: requestedColor ?? "#8B5CF6", properties: ["fillOpacity": 0.2], shape: circle ? "ellipse" : "rectangle", pattern: wantsStars ? "stars" : "solid")
         } else if request.contains("coin") {
-            object = CanvasObject(kind: "widget", title: "Coin multiplier", x: point.x, y: point.y, width: 400, height: 290,
-                                  color: "#EAB308", properties: ["count": 1], code: coinCode)
+            object = CanvasObject(kind: "widget", title: "Coin multiplier", x: point.x, y: point.y, width: 110, height: 110,
+                                  color: "#EAB308", properties: ["value": 1], code: coinCode,
+                                  propertySpecs: [ObjectPropertySpec(key: "value", label: "Value", control: "number", min: 1, max: 1000, step: 1)])
         } else if request.contains("animate") || request.contains("animation") || request.contains("pendulum") {
             object = CanvasObject(kind: "widget", title: "Pendulum laboratory", x: point.x, y: point.y, width: 420, height: 320,
                                   color: "#2563EB", properties: ["speed": 1], code: pendulumCode)
@@ -307,9 +376,11 @@ enum LocalAssistant {
     }
     private static let coinCode = """
     <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
-    *{box-sizing:border-box}body{margin:0;background:#fffbeb;color:#713f12;font:15px -apple-system,sans-serif;padding:24px}h2{font-size:19px;margin:0 0 7px}p{opacity:.7;margin:0 0 20px}.coins{display:flex;gap:7px;flex-wrap:wrap;max-height:135px;overflow:auto}.coin{border:2px solid #f59e0b;background:#fde68a;border-radius:50%;width:40px;height:40px;color:#92400e;font-size:21px;font-weight:600;cursor:pointer}footer{font-size:12px;margin-top:16px;opacity:.6}
-    </style></head><body><h2>Small change. Big possibilities.</h2><p>Tap any coin to make another.</p><div class="coins" id="coins"></div><footer id="count"></footer><script>
-    let n=0;function add(){if(n>=500)return;let b=document.createElement('button');b.className='coin';b.textContent='◈';b.onclick=add;document.getElementById('coins').appendChild(b);n++;document.getElementById('count').textContent=n+' coins • interactive object';}add();
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;display:grid;place-items:center}
+    button{width:82%;aspect-ratio:1;border:5px solid #ca8a04;border-radius:50%;background:radial-gradient(circle at 30% 25%,#fef08a,#eab308);box-shadow:inset 0 0 0 5px #fde047;color:#854d0e;font:bold 44px system-ui;cursor:pointer;touch-action:manipulation}
+    </style></head><body><button aria-label="Duplicate coin">1</button><script>
+    function refresh(){document.querySelector('button').textContent=canvasProperties.value||1}refresh();window.addEventListener('canvaspropertieschange',refresh);
+    document.querySelector('button').onclick=async()=>{try{await canvasHost.duplicate(canvasObject.id,{dx:canvasObject.width+24,dy:0})}catch(e){document.querySelector('button').title=e.message}};
     </script></body></html>
     """
     private static let pendulumCode = """

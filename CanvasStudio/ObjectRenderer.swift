@@ -28,14 +28,9 @@ final class ObjectRenderer {
                 text("Image", in: rect.insetBy(dx: 20, dy: 20), font: .systemFont(ofSize: 18, weight: .medium), color: secondary)
             }
         case "widget":
-            drawCard(rect, context: context, dark: dark)
+            if (object.properties["card"] ?? 0) > 0 { drawCard(rect, context: context, dark: dark) }
             if let snapshot = widgetSnapshots[object.id] {
-                context.addPath(UIBezierPath(roundedRect: rect, cornerRadius: 16).cgPath)
-                context.clip()
                 snapshot.draw(in: rect)
-            } else {
-                text(object.title, in: CGRect(x: rect.minX + 22, y: rect.minY + 22, width: rect.width - 44, height: 40), font: .systemFont(ofSize: 20, weight: .semibold), color: foreground)
-                text("Interactive object", in: CGRect(x: rect.minX + 22, y: rect.minY + 65, width: rect.width - 44, height: 35), font: .systemFont(ofSize: 14), color: secondary)
             }
         case "frame":
             let paper = (object.properties["paper"] ?? 0) > 0
@@ -46,13 +41,9 @@ final class ObjectRenderer {
             context.drawPath(using: .fillStroke)
             text(object.title, in: CGRect(x: rect.minX + 16, y: rect.minY + 12, width: rect.width - 32, height: 28), font: .systemFont(ofSize: 14, weight: .semibold), color: ink)
         case "latex":
-            drawCard(rect, context: context, dark: dark)
-            if !object.title.isEmpty {
-                text(object.title.uppercased(), in: CGRect(x: rect.minX + 22, y: rect.minY + 16, width: rect.width - 44, height: 22), font: .systemFont(ofSize: 10, weight: .semibold), color: secondary)
-            }
-            let display = MathDisplay.attributed(object.text, size: CGFloat(min(240, max(8, object.properties["fontSize"] ?? 27))), color: ink)
-            let available = CGRect(x: rect.minX + 22, y: rect.minY + 42, width: rect.width - 44, height: rect.height - 54)
-            display.draw(with: available, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+            EquationRenderer.draw(object.text, in: rect, context: context,
+                                  color: dark && ink.studioLuminance < 0.22 ? foreground : ink,
+                                  fontSize: CGFloat(min(240, max(8, object.properties["fontSize"] ?? 28))))
         default:
             let size = CGFloat(min(240, max(8, object.properties["fontSize"] ?? (object.title == "Heading" ? 32 : 21))))
             let weight: UIFont.Weight = (object.properties["bold"] ?? 0) > 0 ? .semibold : .regular
@@ -326,39 +317,6 @@ struct PlotExpression {
             default: return .nan
             }
         }
-    }
-}
-
-/// Lightweight native display for common math notation. Original LaTeX remains editable in the model.
-enum MathDisplay {
-    static func attributed(_ source: String, size: CGFloat, color: UIColor) -> NSAttributedString {
-        var value = source.replacingOccurrences(of: "$$", with: "").replacingOccurrences(of: "$", with: "").replacingOccurrences(of: "\\(", with: "").replacingOccurrences(of: "\\)", with: "").replacingOccurrences(of: "\\[", with: "").replacingOccurrences(of: "\\]", with: "")
-        let symbols = ["\\alpha":"α", "\\beta":"β", "\\gamma":"γ", "\\theta":"θ", "\\omega":"ω", "\\Delta":"Δ", "\\pi":"π", "\\sigma":"σ", "\\lambda":"λ", "\\mu":"μ", "\\hbar":"ℏ", "\\infty":"∞", "\\sum":"∑", "\\int":"∫", "\\partial":"∂", "\\times":"×", "\\cdot":"·", "\\pm":"±", "\\approx":"≈", "\\leq":"≤", "\\geq":"≥", "\\rightarrow":"→", "\\sin":"sin", "\\cos":"cos", "\\tan":"tan", "\\log":"log", "\\ln":"ln", "\\left":"", "\\right":"", "\\,":" ", "\\!":"", "\\quad":"  "]
-        for (key, replacement) in symbols.sorted(by: { $0.key.count > $1.key.count }) { value = value.replacingOccurrences(of: key, with: replacement) }
-        value = value.replacingOccurrences(of: #"\\frac\{([^{}]*)\}\{([^{}]*)\}"#, with: "($1)/($2)", options: .regularExpression)
-        value = value.replacingOccurrences(of: #"\\sqrt\{([^{}]*)\}"#, with: "√($1)", options: .regularExpression)
-        value = value.replacingOccurrences(of: #"\\(?:text|mathrm|mathbf)\{([^{}]*)\}"#, with: "$1", options: .regularExpression)
-        let result = NSMutableAttributedString(string: "")
-        let chars = Array(value)
-        var index = 0
-        while index < chars.count {
-            let char = chars[index]
-            if char == "^" || char == "_", index + 1 < chars.count {
-                let superscript = char == "^"
-                index += 1
-                var part = ""
-                if chars[index] == "{" {
-                    index += 1
-                    while index < chars.count && chars[index] != "}" { part.append(chars[index]); index += 1 }
-                    if index < chars.count { index += 1 }
-                } else { part.append(chars[index]); index += 1 }
-                result.append(NSAttributedString(string: part, attributes: [.font: UIFont(name: "TimesNewRomanPSMT", size: size * 0.64) ?? .systemFont(ofSize: size * 0.64), .foregroundColor: color, .baselineOffset: superscript ? size * 0.38 : -size * 0.18]))
-            } else {
-                result.append(NSAttributedString(string: String(char), attributes: [.font: UIFont(name: "TimesNewRomanPS-ItalicMT", size: size) ?? .systemFont(ofSize: size), .foregroundColor: color]))
-                index += 1
-            }
-        }
-        return result
     }
 }
 

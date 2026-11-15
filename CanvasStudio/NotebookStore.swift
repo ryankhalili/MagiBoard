@@ -11,6 +11,7 @@ final class NotebookStore: ObservableObject {
     @Published var colorHex: String = "#243449"
     @Published var lineWidth: Double = 3
     @Published var reference: CanvasRect?
+    @Published var pendingTasks: [CanvasTaskRegion] = []
     @Published var status = "Saved on this iPad"
     @Published var zoom: Double = 1
     @Published var viewport = CanvasRect(x: 0, y: 0, width: 1100, height: 800)
@@ -153,7 +154,7 @@ final class NotebookStore: ObservableObject {
     private func updateHistoryState() { canUndo = !undoStack.isEmpty; canRedo = !redoStack.isEmpty }
     private func clearHistory() { pendingCheckpoint = nil; undoStack = []; redoStack = []; updateHistoryState() }
 
-    func apply(_ response: AgentResponse) throws {
+    func apply(_ response: AgentResponse, selectResults: Bool = true) throws {
         guard response.operations.count <= 100 else { throw NotebookError.invalid("The agent proposed too many operations at once.") }
         var proposed = notebook
         for operation in response.operations {
@@ -175,8 +176,30 @@ final class NotebookStore: ObservableObject {
         try NotebookValidation.validate(proposed)
         guard proposed != notebook else { status = response.message; return }
         mutate { $0 = proposed }
-        selectedIDs = Set(response.operations.compactMap { $0.type == "delete" ? nil : ($0.id ?? $0.object?.id) })
+        if selectResults { selectedIDs = Set(response.operations.compactMap { $0.type == "delete" ? nil : ($0.id ?? $0.object?.id) }) }
+        else { selectedIDs.formIntersection(Set(notebook.objects.map(\.id))) }
         status = response.message
+    }
+
+    /// Merge independent agent work without overwriting an object edited since its snapshot.
+    func applyAgentResponse(_ response: AgentResponse, basedOn baseline: Notebook) throws {
+        guard baseline.id == notebook.id else { throw NotebookError.invalid("This task belongs to another notebook.") }
+        let before = Dictionary(uniqueKeysWithValues: baseline.objects.map { ($0.id, $0) })
+        let current = Dictionary(uniqueKeysWithValues: notebook.objects.map { ($0.id, $0) })
+        for operation in response.operations where operation.type == "update" || operation.type == "delete" {
+            guard let id = operation.id ?? operation.object?.id, let original = before[id], current[id] == original else {
+                throw NotebookError.invalid("An object this task wanted to change was edited while it worked. Your edits are safe; retry with the latest canvas.")
+            }
+        }
+        let gestureInProgress = pendingCheckpoint != nil
+        if gestureInProgress { commit() }
+        do {
+            try apply(response, selectResults: false)
+            if gestureInProgress { checkpoint() }
+        } catch {
+            if gestureInProgress { checkpoint() }
+            throw error
+        }
     }
 
     func newNotebook(title: String = "Untitled notebook") {
@@ -229,8 +252,32 @@ final class NotebookStore: ObservableObject {
             catalog = proposed; status = "Saved to your object catalog"
         } catch { status = "Could not save object: \(error.localizedDescription)" }
     }
-    func insertFromCatalog(_ object: CanvasObject) {
-        var copy = object; copy.id = UUID(); copy.x = viewport.x + 120; copy.y = viewport.y + 120; add(copy)
+    func exportObject(_ object: CanvasObject) -> URL? {
+        do {
+            try NotebookValidation.validate(object)
+            let name = object.title.replacingOccurrences(of: "[^a-zA-Z0-9 _-]", with: "", options: .regularExpression)
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(name.isEmpty ? "Object" : String(name.prefix(70)))-\(object.id.uuidString.prefix(8)).magiboardobject")
+            try encoder.encode(ObjectPackage(object: object)).write(to: url, options: .atomic)
+            return url
+        } catch { status = "Could not export object: \(error.localizedDescription)"; return nil }
+    }
+    @discardableResult func importObjectPackage(_ url: URL) -> Bool {
+        let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= 30_000_000 else { throw NotebookError.invalid("This object package is too large.") }
+            let package = try decoder.decode(ObjectPackage.self, from: Data(contentsOf: url))
+            try package.validate()
+            let oldCount = catalog.count
+            saveToCatalog(package.object)
+            return catalog.count > oldCount
+        } catch { status = "Could not import object: \(error.localizedDescription)"; return false }
+    }
+    @discardableResult func insertFromCatalog(_ object: CanvasObject) -> Bool {
+        var copy = object; copy.id = UUID(); copy.x = viewport.x + 120; copy.y = viewport.y + 180; add(copy)
+        guard notebook.objects.contains(where: { $0.id == copy.id }) else { return false }
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .canvasFocusObject, object: copy.id) }
+        return true
     }
     func removeFromCatalog(id: UUID) {
         do {

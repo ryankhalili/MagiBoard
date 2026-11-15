@@ -175,4 +175,122 @@ final class CanvasRendererTests: XCTestCase {
         XCTAssertTrue(view.ink.drawingGestureRecognizer.isEnabled)
         XCTAssertEqual(view.ink.drawingPolicy, .pencilOnly)
     }
+
+    func testToolSwitchCancelsObjectDragWithoutLeavingUndoOrCameraMotion() throws {
+        let store = try store()
+        let object = CanvasObject(x: -300, y: -200, width: 180, height: 140)
+        store.notebook.objects = [object]
+        store.tool = .select
+        let view = CanvasHostView(store: store)
+        view.frame = CGRect(x: 0, y: 0, width: 1000, height: 800); view.layoutIfNeeded()
+        let camera = view.worldContentOffset
+        view.beginSelectionDrag(at: CGPoint(x: -220, y: -130))
+        view.updateSelectionDrag(to: CGPoint(x: -140, y: -80))
+        XCTAssertEqual(store.notebook.objects[0].x, object.x + 80)
+        store.tool = .magic; view.synchronize()
+        XCTAssertEqual(store.notebook.objects, [object])
+        XCTAssertTrue(store.selectedIDs.isEmpty)
+        XCTAssertFalse(store.canUndo, "Cancelling a move must not create an undo entry")
+        XCTAssertEqual(view.worldContentOffset.x, camera.x, accuracy: 0.001)
+        XCTAssertEqual(view.worldContentOffset.y, camera.y, accuracy: 0.001)
+        // A late callback from the cancelled recognizer cannot apply its old delta.
+        view.updateSelectionDrag(to: CGPoint(x: 500, y: 500))
+        view.finishSelectionDrag(cancelled: false)
+        XCTAssertEqual(store.notebook.objects, [object])
+    }
+
+    func testMagicDragCancelsUsingOriginalToolAndOnlyCompletedGestureSubmits() throws {
+        let store = try store()
+        store.tool = .magic
+        let previous = CanvasRect(x: -80, y: -120, width: 0, height: 0)
+        store.reference = previous
+        let view = CanvasHostView(store: store)
+        view.frame = CGRect(x: 0, y: 0, width: 1000, height: 800); view.layoutIfNeeded()
+        var submissions = 0
+        view.onReference = { submissions += 1 }
+        view.beginSelectionDrag(at: CGPoint(x: -100, y: -100))
+        view.updateSelectionDrag(to: CGPoint(x: 200, y: 180))
+        store.tool = .pen; view.synchronize()
+        XCTAssertEqual(store.reference, previous)
+        XCTAssertEqual(submissions, 0)
+        XCTAssertFalse(store.canUndo)
+        store.tool = .magic; view.synchronize()
+        view.beginSelectionDrag(at: CGPoint(x: -100, y: -100))
+        view.updateSelectionDrag(to: CGPoint(x: 200, y: 180))
+        view.finishSelectionDrag(cancelled: false)
+        view.finishSelectionDrag(cancelled: false)
+        XCTAssertEqual(submissions, 1)
+        XCTAssertEqual(store.reference, CanvasRect(x: -100, y: -100, width: 300, height: 280))
+    }
+
+    func testToolAndKeyboardLayoutChangesKeepWorldCameraAndScopeInkMenus() throws {
+        let store = try store()
+        let view = CanvasHostView(store: store)
+        view.frame = CGRect(x: 0, y: 0, width: 1000, height: 800); view.layoutIfNeeded()
+        view.ink.setZoomScale(1.4, animated: false)
+        view.ink.setContentOffset(CGPoint(x: view.inkOrigin.x * 1.4 - 800, y: view.inkOrigin.y * 1.4 - 600), animated: false)
+        let camera = view.worldContentOffset
+        for tool in CanvasTool.allCases {
+            store.tool = tool; view.synchronize()
+            XCTAssertEqual(view.ink.allowsInkEditingMenu, tool == .lasso)
+            if tool != .lasso { XCTAssertFalse(view.ink.canPerformAction(#selector(UIResponderStandardEditActions.selectAll(_:)), withSender: nil)) }
+            view.ink.scrollRectToVisible(CGRect(x: 0, y: 0, width: 300, height: 300), animated: false)
+            view.frame.size.height = 500; view.setNeedsLayout(); view.layoutIfNeeded()
+            view.frame.size.height = 800; view.setNeedsLayout(); view.layoutIfNeeded()
+            XCTAssertEqual(view.ink.zoomScale, 1.4, accuracy: 0.001)
+            XCTAssertEqual(view.worldContentOffset.x, camera.x, accuracy: 0.001)
+            XCTAssertEqual(view.worldContentOffset.y, camera.y, accuracy: 0.001)
+        }
+    }
+
+    func testWidgetHostBatchCreatesRealWorldObjectsAndIsOneUndoStep() throws {
+        let store = try store()
+        let source = CanvasObject(kind: "widget", title: "Coin", x: -200, y: -100, width: 110, height: 110,
+                                  properties: ["value": 1, "speed": 2], code: "<button>Coin</button>")
+        store.notebook.objects = [source]
+        let created = CanvasObject(kind: "shape", x: -600, y: -400, width: 60, height: 60, shape: "circle")
+        let request = WidgetHostRequest(requestID: "world-objects", operations: [
+            WidgetHostOperation(type: .create, object: created),
+            WidgetHostOperation(type: .duplicate, id: source.id, dx: 134, dy: 0),
+            WidgetHostOperation(type: .update, id: source.id, patch: WidgetObjectPatch(properties: ["value": 5]))
+        ])
+        let result = try WidgetHostProtocol.apply(request, sourceID: source.id, store: store)
+        XCTAssertEqual(store.notebook.objects.count, 3)
+        XCTAssertEqual(result.objects.count, 3)
+        XCTAssertNotEqual(result.ids[0], created.id)
+        XCTAssertNotEqual(result.ids[1], source.id)
+        XCTAssertEqual(store.notebook.objects[1].x, -600)
+        XCTAssertEqual(store.notebook.objects[2].x, -66)
+        XCTAssertEqual(store.notebook.objects[2].code, source.code)
+        XCTAssertEqual(store.notebook.objects[0].properties, ["value": 5, "speed": 2])
+        XCTAssertTrue(store.canUndo)
+        store.undo()
+        XCTAssertEqual(store.notebook.objects, [source])
+        XCTAssertFalse(store.canUndo)
+        store.redo()
+        XCTAssertEqual(store.notebook.objects.count, 3)
+    }
+
+    func testWidgetProtocolRejectsInvalidBatchAtomicallyAndBoundsMutationRate() throws {
+        let store = try store()
+        let source = CanvasObject(kind: "widget", code: "<button>Coin</button>")
+        store.notebook.objects = [source]
+        let invalid = WidgetHostRequest(requestID: "invalid", operations: [
+            WidgetHostOperation(type: .duplicate, id: source.id),
+            WidgetHostOperation(type: .update, id: source.id, patch: WidgetObjectPatch(width: -10))
+        ])
+        XCTAssertThrowsError(try WidgetHostProtocol.apply(invalid, sourceID: source.id, store: store))
+        XCTAssertEqual(store.notebook.objects, [source])
+        XCTAssertFalse(store.canUndo)
+        XCTAssertThrowsError(try WidgetHostProtocol.decode(["version": 1, "requestID": "unsupported", "operations": [["type": "delete", "id": source.id.uuidString]]]))
+        XCTAssertThrowsError(try WidgetHostProtocol.decode(["version": 1, "requestID": "large", "operations": [["type": "create", "object": ["code": String(repeating: "x", count: 262_144)]]]]))
+        let many = WidgetHostRequest(requestID: "too-many", operations: Array(repeating: WidgetHostOperation(type: .duplicate, id: source.id), count: 25))
+        XCTAssertThrowsError(try WidgetHostProtocol.apply(many, sourceID: source.id, store: store))
+        XCTAssertEqual(store.notebook.objects, [source])
+        var budget = WidgetMutationBudget()
+        for _ in 0..<5 { XCTAssertTrue(budget.consume(24, at: 100)) }
+        XCTAssertFalse(budget.consume(1, at: 100))
+        XCTAssertTrue(budget.consume(24, at: 112))
+        XCTAssertFalse(budget.consume(25, at: 200))
+    }
 }

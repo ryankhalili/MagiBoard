@@ -58,6 +58,28 @@ final class CanvasStudioUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed)
     }
 
+    private func expectCanvas(_ canvas: XCUIElement, _ description: String, timeout: TimeInterval = 5,
+                              matching condition: @escaping ([String: Double]) -> Bool) {
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+            condition(canvasState(canvas))
+        }, object: canvas)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: timeout), .completed,
+                       "\(description). Current canvas: \(canvas.value as? String ?? "missing")")
+    }
+
+    private func dismissMagicOnboarding(in app: XCUIApplication) {
+        let gotIt = app.buttons["magicGotIt"]
+        if gotIt.waitForExistence(timeout: 2) { gotIt.tap() }
+    }
+
+    private func selectAllText(in field: XCUIElement, app: XCUIApplication) {
+        field.press(forDuration: 1)
+        let menuItem = app.menuItems["Select All"].firstMatch
+        let selectAll = menuItem.exists ? menuItem : app.buttons["Select All"].firstMatch
+        XCTAssertTrue(selectAll.waitForExistence(timeout: 3))
+        selectAll.tap()
+    }
+
     func testGraphParameterChangeAndUndo() {
         let app = launch()
         app.buttons["insert"].tap()
@@ -89,9 +111,169 @@ final class CanvasStudioUITests: XCTestCase {
         app.buttons["magicSend"].tap()
         let reply = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Offline command applied")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 5))
+        let canvas = app.otherElements["infiniteCanvas"]
+        expectCanvas(canvas, "Completing a task keeps Magic active without selecting its result") { $0["tool"] == 7 && $0["selected"] == 0 }
+        let selectResult = app.buttons["selectTaskResult"]
+        XCTAssertTrue(selectResult.waitForExistence(timeout: 3))
+        selectResult.tap()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "objectInspector").firstMatch.waitForExistence(timeout: 3))
         XCTAssertEqual(app.textFields["Object name"].value as? String, "Triangle")
         XCTAssertTrue(app.buttons["undo"].isEnabled)
+    }
+
+    func testMagicReferenceSurvivesTwoFingerZoomAndToolChangesStartFresh() throws {
+        let app = launch()
+        let canvas = app.otherElements["infiniteCanvas"]
+        let original = canvasState(canvas)
+        app.buttons["magic"].tap()
+        dismissMagicOnboarding(in: app)
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.20, dy: 0.32)).press(forDuration: 0.1,
+            thenDragTo: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.47, dy: 0.47)))
+        expectCanvas(canvas, "A one-finger Magic drag creates a reference area") {
+            $0["reference"] == 1 && ($0["referenceWidth"] ?? 0) > 150 && ($0["referenceHeight"] ?? 0) > 70
+        }
+        let reference = canvasState(canvas)
+        XCTAssertEqual(try XCTUnwrap(reference["x"]), try XCTUnwrap(original["x"]), accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(reference["y"]), try XCTUnwrap(original["y"]), accuracy: 1)
+        // XCTest exposes a real two-touch pinch; it exercises navigation taking precedence over focus.
+        // Small XCTest scales move each touch only a few points, below UIKit recognition slop.
+        canvas.pinch(withScale: 2.5, velocity: 1)
+        expectCanvas(canvas, "Two fingers zoom while Magic remains active") {
+            ($0["zoom"] ?? 0) > (reference["zoom"] ?? 0) + 0.05 && $0["tool"] == 7
+        }
+        let zoomed = canvasState(canvas)
+        for key in ["referenceX", "referenceY", "referenceWidth", "referenceHeight"] {
+            XCTAssertEqual(try XCTUnwrap(zoomed[key]), try XCTUnwrap(reference[key]), accuracy: 1, "Navigation must preserve the completed Magic reference")
+        }
+        XCTAssertEqual(zoomed["strokes"], original["strokes"])
+        XCTAssertEqual(zoomed["objects"], original["objects"])
+        XCTAssertFalse(app.buttons["undo"].isEnabled)
+        app.buttons["tool_pen"].tap()
+        expectCanvas(canvas, "Pen exits Magic and clears its reference") { $0["tool"] == 0 && $0["reference"] == 0 }
+        let pen = canvasState(canvas)
+        XCTAssertEqual(try XCTUnwrap(pen["x"]), try XCTUnwrap(zoomed["x"]), accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(pen["y"]), try XCTUnwrap(zoomed["y"]), accuracy: 1)
+        app.buttons["magic"].tap()
+        expectCanvas(canvas, "Reopening Magic starts without a stale reference") { $0["tool"] == 7 && $0["reference"] == 0 }
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.70, dy: 0.35)).tap()
+        expectCanvas(canvas, "A new Magic tap creates a fresh waypoint") { $0["reference"] == 1 && $0["referenceWidth"] == 0 }
+        XCTAssertNotEqual(canvasState(canvas)["referenceX"], reference["referenceX"])
+    }
+
+    func testSelectionToolbarCopiesDuplicatesPastesAndDeletesRealObjects() throws {
+        let app = launch()
+        let canvas = app.otherElements["infiniteCanvas"]
+        let count = try XCTUnwrap(canvasState(canvas)["objects"])
+        app.buttons["tool_select"].tap()
+        try coordinate(worldX: 280, worldY: 440, on: canvas).tap()
+        XCTAssertTrue(app.buttons["selectionCopy"].waitForExistence(timeout: 4))
+        app.buttons["selectionCopy"].tap()
+        XCTAssertEqual(canvasState(canvas)["objects"], count)
+        XCTAssertFalse(app.buttons["undo"].isEnabled, "Copy must not change the notebook")
+        app.buttons["selectionDuplicate"].tap()
+        expectCanvas(canvas, "Duplicate creates a distinct canvas object") { $0["objects"] == count + 1 && $0["selected"] == 1 }
+        app.buttons["selectionPaste"].tap()
+        expectCanvas(canvas, "Paste creates another object from the copied selection") { $0["objects"] == count + 2 && $0["selected"] == 1 }
+        app.buttons["selectionDelete"].tap()
+        expectCanvas(canvas, "Delete removes only the pasted selection") { $0["objects"] == count + 1 && $0["selected"] == 0 }
+        app.buttons["undo"].tap()
+        expectCanvas(canvas, "Undo restores the deleted object") { $0["objects"] == count + 2 }
+        app.buttons["undo"].tap()
+        expectCanvas(canvas, "Undo removes the paste") { $0["objects"] == count + 1 }
+        app.buttons["undo"].tap()
+        expectCanvas(canvas, "Undo removes the duplicate") { $0["objects"] == count }
+        XCTAssertFalse(app.buttons["undo"].isEnabled)
+        app.buttons["tab_home"].tap()
+        let allObjects = app.buttons["selectAllObjects"]
+        XCTAssertTrue(allObjects.waitForExistence(timeout: 3))
+        allObjects.tap()
+        expectCanvas(canvas, "All objects selects every canvas object without changing the notebook") {
+            $0["selected"] == count && $0["objects"] == count
+        }
+        XCTAssertFalse(app.buttons["undo"].isEnabled)
+    }
+
+    func testCoinInteractionDuplicatesOntoCanvasAndDoneRestoresSelection() throws {
+        let app = launch()
+        let canvas = app.otherElements["infiniteCanvas"]
+        let initialCount = try XCTUnwrap(canvasState(canvas)["objects"])
+        app.buttons["magic"].tap()
+        dismissMagicOnboarding(in: app)
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.30, dy: 0.40)).tap()
+        let prompt = app.descendants(matching: .any).matching(identifier: "magicPrompt").firstMatch
+        prompt.tap(); prompt.typeText("Create an interactive coin")
+        app.buttons["magicSend"].tap()
+        let selectResult = app.buttons["selectTaskResult"]
+        XCTAssertTrue(selectResult.waitForExistence(timeout: 5))
+        selectResult.tap()
+        let interact = app.buttons["selectionInteract"]
+        XCTAssertTrue(interact.waitForExistence(timeout: 4))
+        let before = canvasState(canvas)
+        let sourceX = try XCTUnwrap(before["selectedX"]), sourceY = try XCTUnwrap(before["selectedY"])
+        XCTAssertEqual(before["objects"], initialCount + 1)
+        interact.tap()
+        expectCanvas(canvas, "Interact explicitly enables the widget") { $0["interacting"] == 1 }
+        let coin = app.webViews.buttons["Duplicate coin"].firstMatch
+        XCTAssertTrue(coin.waitForExistence(timeout: 8))
+        coin.tap()
+        expectCanvas(canvas, "The coin adds a real object to the parent canvas") { $0["objects"] == initialCount + 2 && $0["interacting"] == 1 }
+        XCTAssertTrue(app.buttons["widgetDone"].waitForExistence(timeout: 3))
+        app.buttons["widgetDone"].tap()
+        expectCanvas(canvas, "Done returns the widget to ordinary selection") { $0["interacting"] == 0 }
+        try coordinate(worldX: sourceX + 134 + 55, worldY: sourceY + 55, on: canvas).tap()
+        expectCanvas(canvas, "The duplicate is independently selectable outside the source") {
+            $0["selected"] == 1 && abs(($0["selectedX"] ?? 0) - (sourceX + 134)) < 1 && abs(($0["selectedY"] ?? 0) - sourceY) < 1
+        }
+        keepScreenshot("Interactive coin duplicated onto canvas", in: app)
+    }
+
+    func testEquationEditorTemplatesValidationAndSavedSource() {
+        let app = launch()
+        app.buttons["tab_insert"].tap()
+        app.buttons["Equation"].tap()
+        let edit = app.buttons["editEquation"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 4))
+        edit.tap()
+        let source = app.textViews["equationSource"]
+        let save = app.buttons["saveEquation"]
+        XCTAssertTrue(source.waitForExistence(timeout: 4))
+        let root = app.buttons["Insert square root"]
+        source.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(root.waitForExistence(timeout: 4))
+        let editorReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            root.isHittable && (source.value as? String) == "E = mc^{2}"
+        }, object: source)
+        XCTAssertEqual(XCTWaiter.wait(for: [editorReady], timeout: 4), .completed)
+        // Exercise the iPad's native editing menu instead of synthetic hardware
+        // modifier events, which can change keyboard modes and lose selection.
+        selectAllText(in: source, app: app)
+        source.typeText("x")
+        let replaced = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "x"), object: source)
+        XCTAssertEqual(XCTWaiter.wait(for: [replaced], timeout: 4), .completed,
+                       "Select All and typing must replace the loaded source before testing templates")
+        selectAllText(in: source, app: app)
+        root.tap()
+        XCTAssertEqual(source.value as? String, #"\sqrt{x}"#, "The template must wrap the actual selected source")
+        selectAllText(in: source, app: app); source.typeText(#"\frac{1}{"#)
+        XCTAssertEqual(source.value as? String, #"\frac{1}{"#)
+        let diagnostic = app.descendants(matching: .any).matching(identifier: "equationDiagnostic").firstMatch
+        XCTAssertTrue(diagnostic.waitForExistence(timeout: 3))
+        XCTAssertFalse(save.isEnabled)
+        let valid = #"\frac{1}{x^{2}}+\sqrt{x}"#
+        selectAllText(in: source, app: app); source.typeText(valid)
+        XCTAssertEqual(source.value as? String, valid)
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in save.isEnabled && !diagnostic.exists }, object: save)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 4), .completed)
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "equationPreview").firstMatch.exists)
+        app.buttons["Dismiss keyboard"].tap()
+        keepScreenshot("Native equation preview and source", in: app)
+        save.tap()
+        XCTAssertTrue(edit.waitForExistence(timeout: 4))
+        edit.tap()
+        XCTAssertTrue(source.waitForExistence(timeout: 3))
+        XCTAssertEqual(source.value as? String, valid, "Saving must persist the edited expression on the canvas object")
+        app.navigationBars.buttons["Cancel"].tap()
     }
 
     func testFingerDrawingCreatesUndoableInk() {

@@ -4,6 +4,8 @@ struct ObjectInspector: View {
     @ObservedObject var store: NotebookStore
     var onClose: () -> Void
     @State private var codeObject: CanvasObject?
+    @State private var equationObject: CanvasObject?
+    @State private var textObject: CanvasObject?
     private let accent = Color(red: 0.39, green: 0.31, blue: 0.83)
     private let colors = ["#334155", "#2563EB", "#7C3AED", "#10B981", "#F59E0B", "#EF4444", "#EC4899"]
 
@@ -11,7 +13,7 @@ struct ObjectInspector: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "slider.horizontal.3").foregroundStyle(accent)
-                Text("Object").font(.headline)
+                Text(store.selectedObjects.first?.title.isEmpty == false ? store.selectedObjects.first!.title : (store.selectedObjects.first?.kind.capitalized ?? "Selection")).font(.headline).lineLimit(1)
                 Spacer()
                 Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(7).background(.quaternary, in: Circle()) }
                     .accessibilityLabel("Close object inspector")
@@ -29,13 +31,24 @@ struct ObjectInspector: View {
                             TextField("Object name", text: stringBinding(object, \.title))
                                 .font(.system(size: 16, weight: .semibold)).textFieldStyle(.roundedBorder)
                         }
-                        if ["text", "latex", "graph"].contains(object.kind) {
+                        if object.kind == "latex" {
                             VStack(alignment: .leading, spacing: 8) {
-                                caption(object.kind == "graph" ? "EXPRESSION" : object.kind == "latex" ? "LATEX SOURCE" : "TEXT")
-                                TextField(object.kind == "graph" ? "sin(x)" : "Write something", text: stringBinding(object, \.text), axis: .vertical)
-                                    .font(object.kind == "text" ? .callout : .system(.callout, design: .monospaced))
-                                    .lineLimit(2...6).textFieldStyle(.roundedBorder)
-                                if object.kind == "graph" { Text("Use x, sin, cos, tan, sqrt, exp, log and powers.").font(.caption2).foregroundStyle(.secondary) }
+                                EquationPreview(source: object.text, fontSize: 26, color: UIColor(studioHex: object.color))
+                                    .frame(height: 95).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                                Button { equationObject = object } label: {
+                                    Label("Edit equation", systemImage: "function").frame(maxWidth: .infinity)
+                                }.buttonStyle(.bordered).accessibilityIdentifier("editEquation")
+                                if let error = EquationRenderer.diagnostic(object.text) { Text(error.localizedDescription).font(.caption2).foregroundStyle(.orange) }
+                            }
+                        } else if object.kind == "text" || object.kind == "graph" {
+                            VStack(alignment: .leading, spacing: 8) {
+                                caption(object.kind == "graph" ? "EXPRESSION" : "TEXT")
+                                Text(object.text.isEmpty ? "Empty" : object.text)
+                                    .font(object.kind == "graph" ? .system(.callout, design: .monospaced) : .callout)
+                                    .lineLimit(4).frame(maxWidth: .infinity, alignment: .leading)
+                                Button { textObject = object } label: {
+                                    Label(object.kind == "graph" ? "Edit expression" : "Edit text", systemImage: "pencil")
+                                }.buttonStyle(.bordered)
                             }
                         }
                         VStack(alignment: .leading, spacing: 10) {
@@ -55,12 +68,18 @@ struct ObjectInspector: View {
                                 update(object.id) { $0.color = String(format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255)) }
                             }), supportsOpacity: false).font(.caption)
                         }
+                        if !object.propertySpecs.isEmpty {
+                            VStack(alignment: .leading, spacing: 14) {
+                                caption("CONTROLS")
+                                ForEach(object.propertySpecs) { spec in declaredProperty(spec, object: object) }
+                            }
+                        }
                         if object.kind == "graph" {
                             VStack(alignment: .leading, spacing: 14) {
                                 caption("LIVE PARAMETERS")
-                                parameter(object, key: "amplitude", label: "Amplitude", fallback: 1, range: 0.1...5)
-                                parameter(object, key: "frequency", label: "Frequency", fallback: 1, range: 0.1...5)
-                                parameter(object, key: "c", label: "Vertical shift · C", fallback: 0, range: -5...5)
+                                if !isDeclared("amplitude", object) { parameter(object, key: "amplitude", label: "Amplitude", fallback: 1, range: 0.1...5) }
+                                if !isDeclared("frequency", object) { parameter(object, key: "frequency", label: "Frequency", fallback: 1, range: 0.1...5) }
+                                if !isDeclared("c", object) { parameter(object, key: "c", label: "Vertical shift · C", fallback: 0, range: -5...5) }
                             }
                         }
                         if object.kind == "shape" {
@@ -71,16 +90,16 @@ struct ObjectInspector: View {
                                     Text("Starry").tag("stars")
                                 }.pickerStyle(.segmented)
                                 if object.shape == "triangle" {
-                                    parameter(object, key: "angleA", label: "Angle A", fallback: 49, range: 1...max(1, 179 - (object.properties["angleB"] ?? 52)), integer: true)
-                                    parameter(object, key: "angleB", label: "Angle B", fallback: 52, range: 1...max(1, 179 - (object.properties["angleA"] ?? 49)), integer: true)
+                                    if !isDeclared("angleA", object) { parameter(object, key: "angleA", label: "Angle A", fallback: 49, range: 1...max(1, 179 - (object.properties["angleB"] ?? 52)), integer: true) }
+                                    if !isDeclared("angleB", object) { parameter(object, key: "angleB", label: "Angle B", fallback: 52, range: 1...max(1, 179 - (object.properties["angleA"] ?? 49)), integer: true) }
                                     HStack { Text("Angle C").foregroundStyle(.secondary); Spacer(); Text(String(format: "%.0f°", 180 - (object.properties["angleA"] ?? 49) - (object.properties["angleB"] ?? 52))).monospacedDigit() }.font(.caption)
                                 }
                             }
                         }
-                        if ["text", "latex"].contains(object.kind) {
+                        if ["text", "latex"].contains(object.kind), !isDeclared("fontSize", object) {
                             parameter(object, key: "fontSize", label: "Text size", fallback: object.kind == "latex" ? 27 : 20, range: 10...72, integer: true)
                         }
-                        if object.kind == "widget" || hasExtraProperties(object) {
+                        if hasExtraProperties(object) {
                             VStack(alignment: .leading, spacing: 10) {
                                 caption("EXPOSED PROPERTIES")
                                 ForEach(extraKeys(object), id: \.self) { key in
@@ -103,13 +122,18 @@ struct ObjectInspector: View {
                             }
                         }
                         if object.kind == "widget" {
+                            Button {
+                                NotificationCenter.default.post(name: .canvasInteractSelected, object: nil)
+                                onClose()
+                            } label: { Label("Interact", systemImage: "hand.tap").frame(maxWidth: .infinity) }
+                                .buttonStyle(.borderedProminent).tint(accent).accessibilityIdentifier("interactObject")
                             Button { codeObject = object } label: {
                                 Label("Edit object code", systemImage: "chevron.left.forwardslash.chevron.right").frame(maxWidth: .infinity)
                             }.buttonStyle(.bordered).tint(accent)
                             Text("HTML and JavaScript run inside this object, with no network or device access.").font(.caption2).foregroundStyle(.secondary)
                         }
                     }.padding(18)
-                }.frame(maxHeight: 550)
+                }.scrollDismissesKeyboard(.interactively).frame(maxHeight: 550)
                 Divider()
                 HStack(spacing: 0) {
                     action("Duplicate", icon: "plus.square.on.square") { store.duplicateSelection() }
@@ -129,6 +153,8 @@ struct ObjectInspector: View {
         .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.primary.opacity(0.07)))
         .shadow(color: .black.opacity(0.06), radius: 20, y: 7)
         .sheet(item: $codeObject) { object in ObjectCodeEditor(store: store, objectID: object.id) }
+        .sheet(item: $equationObject) { object in EquationEditor(store: store, objectID: object.id) }
+        .sheet(item: $textObject) { object in ObjectTextEditor(store: store, objectID: object.id) }
         .accessibilityIdentifier("objectInspector")
     }
 
@@ -167,9 +193,44 @@ struct ObjectInspector: View {
     }
     private func extraKeys(_ object: CanvasObject) -> [String] {
         let standard: Set<String> = ["amplitude", "frequency", "c", "angleA", "angleB", "angleC", "fontSize", "opacity", "fillOpacity", "bold", "card", "strokeWidth", "cornerRadius"]
-        return object.properties.keys.filter { object.kind == "widget" || !standard.contains($0) }.sorted()
+        return object.properties.keys.filter { !isDeclared($0, object) && (object.kind == "widget" || !standard.contains($0)) }.sorted()
     }
     private func hasExtraProperties(_ object: CanvasObject) -> Bool { !extraKeys(object).isEmpty }
+    private func isDeclared(_ key: String, _ object: CanvasObject) -> Bool { object.propertySpecs.contains { $0.key == key } }
+    @ViewBuilder private func declaredProperty(_ spec: ObjectPropertySpec, object: CanvasObject) -> some View {
+        let label = spec.label.isEmpty ? spec.key : spec.label
+        let value = numericBinding(object, key: spec.key, fallback: 0)
+        switch spec.control {
+        case "toggle":
+            Toggle(label, isOn: Binding(get: { value.wrappedValue >= 0.5 }, set: { value.wrappedValue = $0 ? 1 : 0 })).font(.subheadline)
+        case "choice":
+            Picker(label, selection: value) {
+                ForEach(spec.choices.indices, id: \.self) { index in Text(spec.choices[index].label).tag(spec.choices[index].value) }
+            }.font(.subheadline)
+        case "slider":
+            let low = spec.min ?? 0
+            let high = max(low + 0.001, spec.max ?? 100)
+            VStack(spacing: 6) {
+                HStack {
+                    Text(label).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(value.wrappedValue.formatted(.number.precision(.fractionLength(0...3))) + (spec.unit.isEmpty ? "" : " " + spec.unit)).monospacedDigit()
+                }.font(.caption)
+                Slider(value: value, in: low...high, step: max(0.0001, spec.step ?? 0.1), onEditingChanged: { editing in
+                    if editing { store.checkpoint() } else { store.commit() }
+                }).tint(accent).accessibilityLabel(label)
+            }
+        default:
+            HStack {
+                Text(label).font(.subheadline)
+                Spacer(minLength: 6)
+                TextField("Value", value: value, format: .number)
+                    .multilineTextAlignment(.trailing).keyboardType(.numbersAndPunctuation)
+                    .textFieldStyle(.roundedBorder).frame(width: 90).accessibilityLabel(label)
+                if !spec.unit.isEmpty { Text(spec.unit).font(.caption).foregroundStyle(.secondary) }
+            }
+        }
+    }
     private func dimensionField(_ label: String, object: CanvasObject, keyPath: WritableKeyPath<CanvasObject, Double>) -> some View {
         HStack(spacing: 5) {
             Text(label).font(.caption2).foregroundStyle(.secondary)
@@ -221,7 +282,7 @@ private struct ObjectCodeEditor: View {
                                     Spacer()
                                     TextField("Value", value: Binding(get: { draft.properties[key] ?? 0 }, set: { draft.properties[key] = $0 }), format: .number)
                                         .multilineTextAlignment(.trailing).keyboardType(.numbersAndPunctuation).frame(width: 140)
-                                    Button { draft.properties.removeValue(forKey: key) } label: { Image(systemName: "minus.circle").foregroundStyle(.red) }.buttonStyle(.borderless)
+                                    Button { draft.properties.removeValue(forKey: key); draft.propertySpecs.removeAll { $0.key == key } } label: { Image(systemName: "minus.circle").foregroundStyle(.red) }.buttonStyle(.borderless)
                                 }
                             }
                             HStack {
@@ -259,5 +320,48 @@ private struct ObjectCodeEditor: View {
             }
             .onAppear { if let object = store.notebook.objects.first(where: { $0.id == objectID }) { draft = object } }
         }.presentationDetents([.large]).frame(minWidth: 500, minHeight: 560)
+    }
+}
+
+private struct ObjectTextEditor: View {
+    @ObservedObject var store: NotebookStore
+    let objectID: UUID
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    @State private var isGraph = false
+    @State private var error = ""
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+                if isGraph {
+                    Text("Use x, powers, parentheses, sin, cos, tan, sqrt, exp, log and ln.").font(.subheadline).foregroundStyle(.secondary)
+                    if !text.isEmpty, PlotExpression(text).evaluate(x: 1).isNaN && PlotExpression(text).evaluate(x: 2).isNaN {
+                        Label("Check the expression and its domain.", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange)
+                    }
+                }
+                TextEditor(text: $text)
+                    .font(isGraph ? .system(size: 21, design: .monospaced) : .system(size: 21))
+                    .autocorrectionDisabled(isGraph).textInputAutocapitalization(isGraph ? .never : .sentences)
+                    .scrollContentBackground(.hidden).padding(12)
+                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                    .accessibilityIdentifier("objectTextSource")
+                if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
+            }.padding(20)
+                .navigationTitle(isGraph ? "Graph expression" : "Text").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            guard var object = store.notebook.objects.first(where: { $0.id == objectID }) else { return }
+                            object.text = text
+                            do { try NotebookValidation.validate(object); store.update(object); dismiss() }
+                            catch { self.error = error.localizedDescription }
+                        }
+                    }
+                }
+                .onAppear {
+                    if let object = store.notebook.objects.first(where: { $0.id == objectID }) { text = object.text; isGraph = object.kind == "graph" }
+                }
+        }.presentationDetents([.large])
     }
 }

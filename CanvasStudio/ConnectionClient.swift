@@ -14,6 +14,19 @@ struct DeviceLogin: Decodable {
     var loginId: String?
 }
 
+struct CanvasAgentJob: Identifiable, Equatable {
+    enum State: String { case running, completed, failed, cancelled }
+    var id: UUID
+    var notebookID: UUID
+    var prompt: String
+    var reference: CanvasRect
+    var state: State = .running
+    var message = "Working…"
+    var resultIDs: Set<UUID> = []
+    var startedAt = Date()
+    var progressLabel: String { prompt.localizedCaseInsensitiveContains("image") ? "Creating image…" : "Working…" }
+}
+
 @MainActor
 final class ConnectionClient: ObservableObject {
     @Published var busy = false
@@ -23,9 +36,13 @@ final class ConnectionClient: ObservableObject {
     @Published var lastFailure = false
     var onCompletion: ((String, Bool) -> Void)?
     @Published var login: DeviceLogin?
-    private var activeTask: Task<Void, Never>?
-    private var activeRequestID: UUID?
+    @Published private(set) var jobs: [CanvasAgentJob] = []
+    private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var taskStores: [UUID: NotebookStore] = [:]
     private var authEpoch: UInt64 = 0
+    private let session: URLSession
+
+    init(session: URLSession = .shared) { self.session = session }
 
     func request<T: Decodable>(_ path: String, settings: StudioSettings, body: Data? = nil, method: String? = nil) async throws -> T {
         guard let base = URL(string: settings.bridgeURL.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -33,12 +50,12 @@ final class ConnectionClient: ObservableObject {
             throw NotebookError.invalid("Connect your Mac companion in Settings first.")
         }
         var req = URLRequest(url: base.appendingPathComponent(path))
-        req.timeoutInterval = 240
+        req.timeoutInterval = 420
         req.httpMethod = method ?? (body == nil ? "GET" : "POST")
         req.setValue("Bearer \(settings.bridgeToken)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let error = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             throw NotebookError.invalid(error?["error"] as? String ?? "The companion could not complete this request.")
@@ -88,26 +105,66 @@ final class ConnectionClient: ObservableObject {
             }
         }
     }
-    func cancel() { activeRequestID = nil; activeTask?.cancel(); activeTask = nil; busy = false; reply = "Request cancelled" }
+    func cancel(_ id: UUID? = nil) {
+        let ids = id.map { [$0] } ?? Array(tasks.keys)
+        for id in ids {
+            tasks.removeValue(forKey: id)?.cancel()
+            taskStores.removeValue(forKey: id)?.pendingTasks.removeAll { $0.id == id }
+            if let index = jobs.firstIndex(where: { $0.id == id && $0.state == .running }) {
+                jobs[index].state = .cancelled; jobs[index].message = "Cancelled"
+            }
+        }
+        busy = !tasks.isEmpty
+        if !ids.isEmpty { reply = "Request cancelled" }
+    }
+    func dismissFinishedJobs() { jobs.removeAll { $0.state != .running } }
+    func focus(_ job: CanvasAgentJob, store: NotebookStore) {
+        guard job.notebookID == store.notebook.id else { return }
+        if let id = job.resultIDs.first, store.notebook.objects.contains(where: { $0.id == id }) {
+            store.tool = .select; store.selectedIDs = job.resultIDs
+            NotificationCenter.default.post(name: .canvasFocusObject, object: id)
+        }
+    }
 
-    func send(_ prompt: String, store: NotebookStore, library: PDFLibrary) {
-        guard !busy, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, store.settings.aiEnabled else { return }
-        busy = true; lastFailure = false; reply = "Working on your canvas…"
-        let requestID = UUID(); activeRequestID = requestID
-        let original = store.notebook
-        let ids = store.selectedIDs
+    @discardableResult
+    func send(_ prompt: String, store: NotebookStore, library: PDFLibrary,
+              completion: ((String, Bool) -> Void)? = nil) -> UUID? {
+        let clean = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, store.settings.aiEnabled else { return nil }
+        guard tasks.count < 4 else { reply = "Four tasks are already running. Wait for one to finish."; return nil }
+        let requestID = UUID(), original = store.notebook, ids = store.selectedIDs
         let reference = store.reference ?? store.viewport
-        activeTask = Task {
+        let settings = store.settings
+        let job = CanvasAgentJob(id: requestID, notebookID: original.id, prompt: clean, reference: reference)
+        jobs.append(job)
+        if jobs.count > 30, let old = jobs.firstIndex(where: { $0.state != .running }) { jobs.remove(at: old) }
+        store.pendingTasks.append(CanvasTaskRegion(id: requestID, rect: reference, label: job.progressLabel))
+        taskStores[requestID] = store
+        busy = true; lastFailure = false; reply = "Working on your canvas…"
+        // Capture all context before allowing the next reference or drawing gesture.
+        let crop = reference.width < 2 || reference.height < 2
+            ? CGRect(x: reference.x - 350, y: reference.y - 250, width: 700, height: 500) : reference.cgRect
+        let visual = settings.bridgeURL.isEmpty ? nil : CanvasExporter.snapshot(store: store, rect: crop)?.jpegData(compressionQuality: 0.65)?.base64EncodedString()
+        let documentText = settings.bridgeURL.isEmpty ? "" : library.textContext(query: clean)
+        tasks[requestID] = Task {
+            var message = "", failed = false, resultIDs = Set<UUID>()
             defer {
-                if activeRequestID == requestID {
-                    busy = false; activeTask = nil; activeRequestID = nil
-                    onCompletion?(reply, lastFailure)
+                if tasks[requestID] != nil {
+                    tasks[requestID] = nil; taskStores[requestID] = nil
+                    store.pendingTasks.removeAll { $0.id == requestID }
+                    busy = !tasks.isEmpty; reply = message; lastFailure = failed
+                    if let i = jobs.firstIndex(where: { $0.id == requestID }) {
+                        jobs[i].state = failed ? .failed : .completed
+                        jobs[i].message = message; jobs[i].resultIDs = resultIDs
+                    }
+                    completion?(message, failed)
+                    onCompletion?(message, failed)
                 }
             }
             do {
                 let response: AgentResponse
-                if store.settings.bridgeURL.isEmpty {
-                    response = LocalAssistant.respond(prompt: prompt, objects: original.objects, reference: reference, selectedIDs: ids)
+                if settings.bridgeURL.isEmpty {
+                    response = LocalAssistant.respond(prompt: clean, objects: original.objects, reference: reference, selectedIDs: ids)
                 } else {
                     struct Payload: Encodable {
                         var prompt: String
@@ -118,23 +175,13 @@ final class ConnectionClient: ObservableObject {
                         var documentText: String
                     }
                     var contextObjects = original.objects
-                    // Raster content travels once as a bounded visual context; keep structured objects lean.
                     for index in contextObjects.indices { contextObjects[index].imageData = nil }
-                    let crop = reference.width < 2 || reference.height < 2
-                        ? CGRect(x: reference.x - 350, y: reference.y - 250, width: 700, height: 500)
-                        : reference.cgRect
-                    let snapshot = CanvasExporter.snapshot(store: store, rect: crop)
-                    let visual = snapshot?.jpegData(compressionQuality: 0.65)?.base64EncodedString()
-                    let payload = Payload(prompt: prompt, objects: contextObjects, selectedIDs: Array(ids), reference: reference,
-                                          imageBase64: visual, documentText: library.textContext(query: prompt))
-                    response = try await request("generate", settings: store.settings, body: JSONEncoder().encode(payload))
+                    let payload = Payload(prompt: clean, objects: contextObjects, selectedIDs: Array(ids), reference: reference,
+                                          imageBase64: visual, documentText: documentText)
+                    response = try await request("generate", settings: settings, body: JSONEncoder().encode(payload))
                 }
                 try Task.checkCancellation()
-                guard activeRequestID == requestID else { return }
-                guard store.notebook == original else {
-                    lastFailure = true; reply = "The canvas changed while I was working. Send again to use the latest version."; return
-                }
-                // An agent changing metadata must not discard an existing image's bytes.
+                guard tasks[requestID] != nil else { return }
                 var result = response
                 for i in result.operations.indices where result.operations[i].type == "update" {
                     if var item = result.operations[i].object, item.imageData == nil,
@@ -142,12 +189,14 @@ final class ConnectionClient: ObservableObject {
                         item.imageData = old.imageData; result.operations[i].object = item
                     }
                 }
-                try store.apply(result)
-                reply = result.message
-                if !result.operations.isEmpty { store.tool = .select }
-            } catch is CancellationError { if activeRequestID == requestID { lastFailure = true; reply = "Request cancelled" } }
-            catch { if activeRequestID == requestID { lastFailure = true; reply = error.localizedDescription } }
+                try store.applyAgentResponse(result, basedOn: original)
+                message = result.message
+                resultIDs = Set(result.operations.compactMap { $0.type == "delete" ? nil : ($0.id ?? $0.object?.id) })
+                // Completing background work never changes the user's current tool or draft focus.
+            } catch is CancellationError { message = "Request cancelled"; failed = true }
+            catch { message = error.localizedDescription; failed = true }
         }
+        return requestID
     }
     static func importPairing(_ url: URL, into store: NotebookStore) {
         let scoped = url.startAccessingSecurityScopedResource(); defer { if scoped { url.stopAccessingSecurityScopedResource() } }

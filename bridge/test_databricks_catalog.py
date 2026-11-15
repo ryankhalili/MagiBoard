@@ -98,6 +98,20 @@ class CatalogTests(unittest.TestCase):
         self.assertIsNone(parse_filename("../" + filename))
         self.assertIsNone(parse_filename("arbitrary.json"))
 
+    def test_valid_large_native_content_and_alpha_color_are_lossless(self):
+        self.object.update(title="A" * 300, text="x" * 50000, code="<script>" + " " * 120000 + "</script>", color="#2563EB80", width=12000)
+        self.object["properties"]["largeValue"] = 2_000_000
+        entry = self.catalog.save_object(self.object)["entry"]
+        loaded = self.catalog.load_object(entry["id"])["object"]
+        for key in ("title", "text", "code", "color", "width", "properties"):
+            self.assertEqual(loaded[key], self.object[key], key)
+
+    def test_oversized_source_is_rejected_instead_of_truncated(self):
+        self.object["code"] = "x" * 524289
+        with self.assertRaises(CatalogError):
+            self.catalog.save_object(self.object)
+        self.assertEqual(self.files, {})
+
 
 if __name__ == "__main__":
     unittest.main()

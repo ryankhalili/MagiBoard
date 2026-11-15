@@ -79,43 +79,95 @@ struct NotebookLibraryView: View {
 
 struct ObjectCatalogView: View {
     @ObservedObject var store: NotebookStore
+    @ObservedObject var agent: ConnectionClient
+    @StateObject private var cloud = CloudObjectCatalog()
     @Environment(\.dismiss) private var dismiss
+    @State private var location = "On this iPad"
+    @State private var importing = false
+    @State private var shareURL: URL?
+    @State private var errorMessage: String?
     var body: some View {
         NavigationStack {
-            Group {
-                if store.catalog.isEmpty {
-                    ContentUnavailableView {
-                        Label("Keep your best creations", systemImage: "square.grid.2x2")
-                    } description: {
-                        Text("Select an object on the canvas and save it to your catalog. Reuse graphs, interactive objects and ideas in any notebook.")
-                    }
-                } else {
-                    List {
+            VStack(spacing: 0) {
+                Picker("Catalog location", selection: $location) {
+                    Text("On this iPad").tag("On this iPad")
+                    Text("Databricks").tag("Databricks")
+                }.pickerStyle(.segmented).padding()
+                List {
+                    if location == "On this iPad" {
                         Section {
+                            if store.catalog.isEmpty { Text("Save an object from its inspector, or import a shared object package.").foregroundStyle(.secondary) }
                             ForEach(store.catalog) { object in
-                                Button {
-                                    store.insertFromCatalog(object); dismiss()
-                                } label: {
-                                    HStack(spacing: 14) {
-                                        Image(systemName: object.libraryIcon).font(.title2).foregroundStyle(.purple)
-                                            .frame(width: 48, height: 48).background(.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                                        VStack(alignment: .leading, spacing: 5) {
-                                            Text(object.title).font(.headline).foregroundStyle(.primary)
-                                            Text(object.kind.capitalized).font(.subheadline).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        Image(systemName: "plus.circle").font(.title3).foregroundStyle(.purple)
-                                    }.padding(.vertical, 5)
-                                }.buttonStyle(.plain)
-                                .swipeActions { Button("Delete", role: .destructive) { store.removeFromCatalog(id: object.id) } }
+                                HStack(spacing: 12) {
+                                    Button {
+                                        if store.insertFromCatalog(object) { store.tool = .select; dismiss() }
+                                        else { errorMessage = store.status }
+                                    } label: {
+                                        catalogRow(title: object.title, kind: object.kind, icon: object.libraryIcon)
+                                    }.buttonStyle(.plain)
+                                    Menu {
+                                        Button("Share object package", systemImage: "square.and.arrow.up") { shareURL = store.exportObject(object) }
+                                        Button("Save version to Databricks", systemImage: "cloud.upload") {
+                                            Task {
+                                                if await cloud.save(object, using: agent, settings: store.settings) { location = "Databricks" }
+                                                else { errorMessage = cloud.status }
+                                            }
+                                        }.disabled(cloud.busy || store.settings.bridgeURL.isEmpty)
+                                        Button("Delete local copy", role: .destructive) { store.removeFromCatalog(id: object.id) }
+                                    } label: { Image(systemName: "ellipsis.circle").font(.title3) }
+                                }.padding(.vertical, 5)
                             }
-                        } footer: { Text("Tap an object to place an independent copy on your canvas. Your original stays in the catalog.") }
+                            Button("Import shared object", systemImage: "square.and.arrow.down") { importing = true }
+                        } footer: { Text("Tap to insert an independent copy. Share an object package with your team; it includes the artwork, behavior, and exposed controls.") }
+                    } else {
+                        Section {
+                            Label("Databricks object library", systemImage: "externaldrive.badge.icloud")
+                            Text(cloud.status).font(.caption).foregroundStyle(.secondary)
+                            Button("Refresh", systemImage: "arrow.clockwise") { Task { await cloud.refresh(using: agent, settings: store.settings) } }.disabled(cloud.busy)
+                            if cloud.busy { ProgressView() }
+                        }
+                        Section {
+                            ForEach(cloud.entries) { entry in
+                                Button {
+                                    Task { if await cloud.load(entry, using: agent, store: store) { dismiss() } }
+                                } label: {
+                                    catalogRow(title: entry.title, kind: entry.kind, icon: "shippingbox")
+                                }.buttonStyle(.plain).disabled(cloud.busy)
+                            }
+                            if cloud.truncated {
+                                Text("Showing a limited set of saved versions. More objects remain in your Databricks volume.").font(.caption).foregroundStyle(.secondary)
+                            }
+                            if cloud.available && cloud.entries.isEmpty { Text("No shared objects yet. Save a version from the local catalog’s menu.").font(.subheadline).foregroundStyle(.secondary) }
+                        } footer: { Text("Each Save creates an immutable version in your workspace. Nothing uploads automatically. Loaded objects work locally, even when you disconnect.") }
                     }
                 }
-            }
-            .navigationTitle("Object catalog")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            }.navigationTitle("Object catalog")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+                .onChange(of: location) { _, value in
+                    if value == "Databricks" && cloud.entries.isEmpty {
+                        Task { await cloud.refresh(using: agent, settings: store.settings) }
+                    }
+                }
+                .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .json]) { result in
+                    do { if !store.importObjectPackage(try result.get()) { errorMessage = store.status } }
+                    catch { errorMessage = error.localizedDescription }
+                }
+                .sheet(item: Binding(get: { shareURL.map(ShareFile.init) }, set: { shareURL = $0?.url })) { ActivitySheet(url: $0.url) }
+                .alert("Object catalog", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                    Button("OK", role: .cancel) { errorMessage = nil }
+                } message: { Text(errorMessage ?? "") }
         }.tint(.purple)
+    }
+    private func catalogRow(title: String, kind: String, icon: String) -> some View {
+        HStack(spacing: 13) {
+            Image(systemName: icon).font(.title3).foregroundStyle(.purple).frame(width: 30)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title.isEmpty ? "Untitled object" : title).font(.headline).foregroundStyle(.primary)
+                Text(kind.capitalized).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "plus.circle").foregroundStyle(.purple)
+        }.contentShape(Rectangle())
     }
 }
 

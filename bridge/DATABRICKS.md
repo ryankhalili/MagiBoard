@@ -8,6 +8,8 @@ Save explicitly uploads one selected canvas object as an immutable JSON snapshot
 
 Each snapshot has a unique version UUID, timestamp, schema version, source object, and content checksum. No overwrite or delete endpoint is exposed. Listings fetch at most 200 metadata records and mark incomplete results as `truncated`; they do not download every object's content. Loads are capped at 12 MiB and revalidate object fields, finite parameters, property controls, and image data. Native import must assign a fresh object ID. Widget code still uses the app's restricted interaction model after import.
 
+Catalog validation preserves supported native fields exactly, including alpha colors and widget source, instead of applying the AI generation limits that shorten content. Oversized content is rejected visibly: title 4 KiB, text 256 KiB, code 512 KiB, and embedded image 8 MiB. Failed saves and notebook object-limit failures remain visible in the app; an unsuccessful load does not switch tools or claim success.
+
 All catalog HTTP endpoints require the same companion bearer token:
 
 - `GET /catalog/status` returns `configured`, `connected`, `provider`, and `message`.

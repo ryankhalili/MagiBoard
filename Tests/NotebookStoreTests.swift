@@ -32,6 +32,7 @@ final class NotebookStoreTests: XCTestCase {
         store.newNotebook(title: "Offline conversation")
         store.settings.bridgeURL = ""
         store.settings.aiEnabled = true
+        store.tool = .magic
         let library = PDFLibrary(directory: directory.appendingPathComponent("References"))
         let client = ConnectionClient()
         let completed = expectation(description: "Offline command finishes after applying its objects")
@@ -49,7 +50,8 @@ final class NotebookStoreTests: XCTestCase {
             XCTAssertEqual(triangle?.properties["angleB"], 52)
             XCTAssertEqual(triangle?.properties["angleC"], 79)
             XCTAssertEqual(triangle?.color, "#16A34A")
-            XCTAssertEqual(store.selectedIDs, Set(store.notebook.objects.map(\.id)))
+            XCTAssertTrue(store.selectedIDs.isEmpty, "Completing a task must not select objects while the user is working")
+            XCTAssertEqual(store.tool, .magic)
             XCTAssertTrue(store.canUndo)
             completed.fulfill()
         }
@@ -110,6 +112,96 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertThrowsError(try NotebookValidation.validate(triangle))
         triangle.properties = ["angleA": 1, "angleB": 89, "angleC": 90]
         XCTAssertNoThrow(try NotebookValidation.validate(triangle))
+    }
+
+    func testDeclaredPropertyRangesAreInclusiveAndAllowOneSidedBounds() throws {
+        for spec in [
+            ObjectPropertySpec(key: "value", label: "Value", min: -2, max: 3),
+            ObjectPropertySpec(key: "value", label: "Value", control: "slider", min: -2, max: 3, step: 0.5)
+        ] {
+            var object = CanvasObject(properties: ["value": -2], propertySpecs: [spec])
+            for valid in [-2.0, 0.25, 3.0] {
+                object.properties["value"] = valid
+                XCTAssertNoThrow(try NotebookValidation.validate(object), "Range endpoints and intermediate values must remain valid")
+            }
+            for invalid in [-2.001, 3.001] {
+                object.properties["value"] = invalid
+                XCTAssertThrowsError(try NotebookValidation.validate(object), "Both numeric and slider bounds apply to stored values")
+            }
+        }
+        var minimumOnly = CanvasObject(properties: ["value": 100], propertySpecs: [ObjectPropertySpec(key: "value", label: "Minimum", min: 1)])
+        XCTAssertNoThrow(try NotebookValidation.validate(minimumOnly))
+        minimumOnly.properties["value"] = 0
+        XCTAssertThrowsError(try NotebookValidation.validate(minimumOnly))
+        var maximumOnly = CanvasObject(properties: ["value": -100], propertySpecs: [ObjectPropertySpec(key: "value", label: "Maximum", max: 1)])
+        XCTAssertNoThrow(try NotebookValidation.validate(maximumOnly))
+        maximumOnly.properties["value"] = 2
+        XCTAssertThrowsError(try NotebookValidation.validate(maximumOnly))
+    }
+
+    func testToggleAndChoiceValuesMustMatchTheirNativeControls() throws {
+        var toggle = CanvasObject(properties: ["enabled": 0], propertySpecs: [ObjectPropertySpec(key: "enabled", label: "Enabled", control: "toggle")])
+        for valid in [0.0, 1.0] {
+            toggle.properties["enabled"] = valid
+            XCTAssertNoThrow(try NotebookValidation.validate(toggle))
+        }
+        for invalid in [-1.0, 0.5, 2.0] {
+            toggle.properties["enabled"] = invalid
+            XCTAssertThrowsError(try NotebookValidation.validate(toggle))
+        }
+        var choice = CanvasObject(properties: ["mode": -2], propertySpecs: [
+            ObjectPropertySpec(key: "mode", label: "Mode", control: "choice", choices: [
+                PropertyChoice(label: "First", value: -2), PropertyChoice(label: "Second", value: 0.5)
+            ])
+        ])
+        XCTAssertNoThrow(try NotebookValidation.validate(choice))
+        choice.properties["mode"] = 0.5
+        XCTAssertNoThrow(try NotebookValidation.validate(choice))
+        choice.properties["mode"] = 0
+        XCTAssertThrowsError(try NotebookValidation.validate(choice), "A Picker must never receive an absent selection")
+        choice.propertySpecs[0].choices = []
+        XCTAssertThrowsError(try NotebookValidation.validate(choice))
+    }
+
+    func testSliderRequiresAnExplicitFinitePositiveStep() throws {
+        var object = CanvasObject(properties: ["value": 0.5], propertySpecs: [
+            ObjectPropertySpec(key: "value", label: "Value", control: "slider", min: 0, max: 1)
+        ])
+        XCTAssertThrowsError(try NotebookValidation.validate(object))
+        for invalid in [0.0, -1.0, 0.0000000001, Double.infinity, Double.nan] {
+            object.propertySpecs[0].step = invalid
+            XCTAssertThrowsError(try NotebookValidation.validate(object))
+        }
+        object.propertySpecs[0].step = 0.000000001
+        XCTAssertNoThrow(try NotebookValidation.validate(object))
+        object.propertySpecs[0].control = "number"
+        object.propertySpecs[0].step = nil
+        XCTAssertNoThrow(try NotebookValidation.validate(object), "Free numeric fields do not require a step")
+    }
+
+    func testLegacyPropertiesWithoutDescriptorsRemainCompatible() throws {
+        let legacy = Data(#"{"kind":"widget","properties":{"enabled":0.5,"mode":-42,"custom":1000000}}"#.utf8)
+        let object = try JSONDecoder().decode(CanvasObject.self, from: legacy)
+        XCTAssertTrue(object.propertySpecs.isEmpty)
+        XCTAssertEqual(object.properties["enabled"], 0.5)
+        XCTAssertNoThrow(try NotebookValidation.validate(object), "Property names alone must not imply new constraints")
+        let restored = try JSONDecoder().decode(CanvasObject.self, from: JSONEncoder().encode(object))
+        XCTAssertEqual(restored, object)
+    }
+
+    func testInvalidDeclaredValueRejectsEntireAgentTransaction() throws {
+        let store = NotebookStore(storageURL: try temporaryDirectory(), loadSaved: false)
+        let before = store.notebook, selection = store.selectedIDs, couldUndo = store.canUndo
+        let invalid = CanvasObject(properties: ["speed": 99], propertySpecs: [
+            ObjectPropertySpec(key: "speed", label: "Speed", control: "slider", min: 0, max: 3, step: 0.1)
+        ])
+        XCTAssertThrowsError(try store.apply(AgentResponse(message: "Invalid controls", operations: [
+            AgentOperation(type: "delete", id: before.objects[0].id),
+            AgentOperation(type: "add", object: invalid)
+        ])))
+        XCTAssertEqual(store.notebook, before, "An invalid property must also roll back earlier operations")
+        XCTAssertEqual(store.selectedIDs, selection)
+        XCTAssertEqual(store.canUndo, couldUndo, "Rejected transactions must not create an undo entry")
     }
 
     func testRoundTripAndImportCannotReplaceExistingNotebook() throws {

@@ -1,4 +1,4 @@
-# MagiBoard · v0.2
+# MagiBoard · v0.3
 
 A native iPad whiteboard for handwriting, interactive objects, and an AI assistant that works where you point. Built for MadHacks with original Swift and Python code; no whiteboard application's source was copied or forked.
 
@@ -6,8 +6,10 @@ A native iPad whiteboard for handwriting, interactive objects, and an AI assista
 
 - Write with Apple Pencil using PencilKit pens, pencil, highlighter, eraser, and ink lasso. Pan, zoom, select objects, resize, duplicate, and undo.
 - Organize notebooks in the sliding library sidebar. Add named page regions, choose blank/dotted/ruled/grid paper, and collapse the drawing toolbar.
-- Create editable geometry, graphs, text, equations, images, and interactive HTML objects. Change exposed numeric properties or save an object to your catalog.
-- Focus Magic Pen on a point or rectangle and type a request. In voice mode, speak a request, hear the reply, and continue with the next request hands-free.
+- Create editable geometry, graphs, text, images, and bare mathematical expressions. The native equation editor previews fractions, scripts, roots, integrals, sums, Greek letters, and more as you type, with a math keyboard accessory and clear syntax errors.
+- Build interactive HTML objects with sliders, number fields, switches, and choices. While **Interact** is enabled, an object can create, duplicate, or update real canvas objects through a bounded document API—for example, a coin that duplicates onto the whiteboard.
+- Focus Magic Pen on a point or rectangle and type a request. Up to four tasks can run while you keep writing or move elsewhere; each keeps its original reference and appears in the task list. In voice mode, speak a request, hear the reply, and continue with the next request hands-free.
+- Reuse objects from the local catalog or share an editable `.magiboardobject` package. With a configured Mac companion, explicitly save and load versioned objects in a Databricks cloud catalog.
 - Search imported PDF references, place pages on the canvas, and write over them. Import images and export a region as PNG/PDF or a complete editable notebook.
 
 Settings are organized into Account, Voice & Magic, Canvas, Storage, and About. Drawing works without an AI connection; a small, explicitly labeled offline command set demonstrates common geometry edits and example objects.
@@ -45,6 +47,8 @@ Keep both devices on the same trusted network and keep the Mac awake. The compan
 
 ChatGPT credentials remain managed by Codex on the Mac. The iPad stores a separate pairing token in Keychain. AI requests share the prompt, structured canvas context, a focused screenshot, and relevant PDF excerpts with the companion. Hosted web search and image generation depend on the connected account and runtime. See the [companion guide](bridge/README.md) for details.
 
+The optional **Databricks** tab in Object catalog uses a configured Unity Catalog volume through the Mac companion. Each Save uploads one immutable object version; Load creates an independent local copy. Notebooks and handwriting are not uploaded automatically. Setup, authentication, and the distinction from experimental SQL charts are documented in the [Databricks guide](bridge/DATABRICKS.md).
+
 ## Voice
 
 Choose **Settings → Voice & Magic → Open voice conversation**, then hold Magic Pen. The app listens for a request, sends the recognized text to Codex, applies valid canvas changes, speaks a reply, and listens again. You can stop the conversation or use text input instead. Speech language and spoken replies are configurable.
@@ -53,11 +57,11 @@ This version uses **Apple speech recognition → Codex text requests → Apple s
 
 ## Test
 
-In Xcode, choose an available iPad simulator and run **Product → Test**. The XCTest targets cover document transactions, persistence, rendering, camera/ink coordinates, voice lifecycle, and native UI interactions.
+In Xcode, choose an available iPad simulator and run **Product → Test**. The XCTest targets cover document transactions, persistence, equation parsing/layout, widget actions, concurrent agent work, camera/ink coordinates, voice lifecycle, and native UI interactions.
 
 ```sh
 cd bridge
-python3 -m unittest test_server test_companion -v
+python3 -m unittest discover -p 'test_*.py' -v
 ```
 
 Standalone model, store, and PDF checks are also available in `Tests/`. See [validation scope](docs/VALIDATION.md) for the evidence and remaining physical-device checks.
@@ -65,13 +69,14 @@ Standalone model, store, and PDF checks are also available in `Tests/`. See [val
 ## Prototype limits
 
 - The expanding canvas has practical limits: 2,000 objects and 40 MB of ink per notebook. Imported PDFs are limited to 40 MB and 300 pages. PDF search uses embedded text, not OCR.
-- Interactive objects run isolated, network-blocked HTML/JavaScript. They do not provide arbitrary native code, Python, shell access, or a persistent backend. Transient widget state may reset on reload; exports are static.
-- Equation display implements a small LaTeX subset. Handwriting conversion requires an explicit visual AI request. GIF imports are static; HTML objects can animate.
+- Interactive objects run isolated, network-blocked HTML/JavaScript. Their typed canvas actions are validated, undoable, and available only in interaction mode. They do not provide arbitrary native code, Python, shell access, or a persistent backend. Transient widget state may reset on reload; exports are static.
+- The original equation typesetter supports a documented [LaTeX subset](docs/ARCHITECTURE.md#equations), not full TeX. Matrices, cases/aligned environments, custom macros, and packages are unsupported. Handwriting conversion requires an explicit visual AI request. GIF imports are static; HTML objects can animate.
+- Concurrent tasks preserve unrelated edits and ink. A task that tries to change an object edited since its request is rejected and must be retried; this is not automatic collaborative merging.
 - AI needs the paired Mac and internet. Native voice is turn-based and has recognition/network latency; microphone behavior and Pencil feel need testing on the actual iPad.
-- API-key settings, Databricks, cloud sync, collaboration, standalone iPad Codex execution, and an extension marketplace are not implemented. The companion's authenticated local HTTP transport is intended for a trusted network.
+- The Databricks catalog needs separate Mac-side setup and stores object snapshots only. Notebook cloud sync, collaboration, SQL data charts, API-key settings, standalone iPad Codex execution, and an extension marketplace are not implemented. The companion's authenticated local HTTP transport is intended for a trusted network.
 
 ## Source and rights
 
-The app uses Apple system frameworks without third-party whiteboard libraries. The companion uses Python's standard library and an externally installed Codex runtime. [Provenance](docs/PROVENANCE.md) records the conceptual inspiration and AI coding assistance; [architecture](docs/ARCHITECTURE.md) describes the implementation boundaries.
+The app uses Apple system frameworks without third-party whiteboard or math libraries. The companion uses Python's standard library, an externally installed Codex runtime, and an optional external Databricks CLI. [Provenance](docs/PROVENANCE.md) records the conceptual inspiration and AI coding assistance; [architecture](docs/ARCHITECTURE.md) describes the implementation boundaries.
 
 [LICENSE](LICENSE) reserves rights in the original project source. No open-source license is granted. Apple frameworks, Codex, imported documents, and generated or retrieved material retain their applicable rights and terms.

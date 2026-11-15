@@ -85,22 +85,23 @@ def finite_number(value, label, lower=-1_000_000, upper=1_000_000):
     return float(value)
 
 
-def validate_property_specs(specs, properties):
-    if not isinstance(specs, list) or len(specs) > 40:
+def validate_property_specs(specs, properties, *, catalog=False):
+    limit = 1_000_000_000 if catalog else 1_000_000
+    if not isinstance(specs, list) or len(specs) > (64 if catalog else 40):
         raise BridgeError("Invalid object property controls.")
     result, seen = [], set()
     for spec in specs:
         if not isinstance(spec, dict):
             raise BridgeError("Invalid object property control.")
         key, control = spec.get("key"), spec.get("control", "number")
-        if not isinstance(key, str) or not key or key not in properties or key in seen:
+        if not isinstance(key, str) or not key or len(key) > 80 or key not in properties or key in seen:
             raise BridgeError("A property control must name one existing numeric parameter.")
         if control not in {"slider", "number", "toggle", "choice"}:
             raise BridgeError("Unknown object property control.")
         seen.add(key)
-        low = finite_number(spec["min"], "property minimum") if spec.get("min") is not None else None
-        high = finite_number(spec["max"], "property maximum") if spec.get("max") is not None else None
-        step = finite_number(spec["step"], "property step", 0.000000001) if spec.get("step") is not None else None
+        low = finite_number(spec["min"], "property minimum", -limit, limit) if spec.get("min") is not None else None
+        high = finite_number(spec["max"], "property maximum", -limit, limit) if spec.get("max") is not None else None
+        step = finite_number(spec["step"], "property step", 0.000000001, limit) if spec.get("step") is not None else None
         if low is not None and high is not None and low >= high:
             raise BridgeError("Property control minimum must be below its maximum.")
         if (low is not None and properties[key] < low) or (high is not None and properties[key] > high):
@@ -110,17 +111,23 @@ def validate_property_specs(specs, properties):
         if control == "toggle" and properties[key] not in (0, 1):
             raise BridgeError("Toggle properties must be zero or one.")
         choices = spec.get("choices", [])
-        if not isinstance(choices, list) or len(choices) > 24:
+        if not isinstance(choices, list) or len(choices) > (40 if catalog else 24):
             raise BridgeError("Invalid property choices.")
         normalized = []
         for choice in choices:
             if not isinstance(choice, dict):
                 raise BridgeError("Invalid property choice.")
-            normalized.append({"label": str(choice.get("label", ""))[:120], "value": finite_number(choice.get("value"), "property choice")})
+            label = choice.get("label", "")
+            if catalog and (not isinstance(label, str) or len(label) > 200):
+                raise BridgeError("A property choice label is too long.")
+            normalized.append({"label": label if catalog else str(label)[:120], "value": finite_number(choice.get("value"), "property choice", -limit, limit)})
         if control == "choice" and (not normalized or properties[key] not in [choice["value"] for choice in normalized]):
             raise BridgeError("A choice property must use a declared choice value.")
-        result.append({"key": key, "label": str(spec.get("label") or key)[:120], "control": control,
-            "min": low, "max": high, "step": step, "unit": str(spec.get("unit") or "")[:30], "choices": normalized})
+        label, unit = spec.get("label", key), spec.get("unit", "")
+        if catalog and (not isinstance(label, str) or len(label) > 200 or not isinstance(unit, str) or len(unit) > 40):
+            raise BridgeError("A property label or unit is too long.")
+        result.append({"key": key, "label": label if catalog else str(label or key)[:120], "control": control,
+            "min": low, "max": high, "step": step, "unit": unit if catalog else str(unit or "")[:30], "choices": normalized})
     return result
 
 
@@ -223,9 +230,31 @@ def validate_catalog_object(raw):
     if not isinstance(raw, dict):
         raise CatalogError("Choose one canvas object to save.")
     try:
-        ident = str(uuid.UUID(str(raw.get("id", ""))))
-        clean = validate_response({"operations": [{"type": "add", "id": ident, "object": raw}]})["operations"][0]["object"]
-        clean = {key: value for key, value in clean.items() if key in set(DEFAULTS) | {"id", "kind", "imageData"}}
+        # Catalog storage must never use authoring-time truncation or recoloring.
+        # Preserve supported native fields losslessly, or reject the save clearly.
+        clean = {key: value for key, value in {**DEFAULTS, **raw}.items() if key in set(DEFAULTS) | {"id", "kind", "imageData"}}
+        clean["id"] = str(uuid.UUID(str(raw.get("id", ""))))
+        if clean.get("kind") not in KINDS:
+            raise ValueError()
+        for key in ("x", "y"):
+            clean[key] = finite_number(clean[key], key, -10_000_000, 10_000_000)
+        for key in ("width", "height"):
+            clean[key] = finite_number(clean[key], key, 1, 100_000)
+        for key, limit in (("title", 4096), ("text", 262_144), ("code", 524_288), ("shape", 4096), ("pattern", 4096)):
+            if not isinstance(clean[key], str) or len(clean[key].encode("utf-8")) > limit:
+                raise ValueError()
+        if not isinstance(clean["color"], str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?", clean["color"]):
+            raise ValueError()
+        properties = clean.get("properties", {})
+        if not isinstance(properties, dict) or len(properties) > 128 or any(not isinstance(key, str) for key in properties):
+            raise ValueError()
+        clean["properties"] = {key: finite_number(value, "property", -1_000_000_000, 1_000_000_000) for key, value in properties.items()}
+        clean["propertySpecs"] = validate_property_specs(clean.get("propertySpecs", []), clean["properties"], catalog=True)
+        if clean["kind"] == "shape" and clean["shape"] == "triangle":
+            a, b = properties.get("angleA", 49), properties.get("angleB", 52)
+            c = properties.get("angleC", 180 - a - b)
+            if any(angle <= 0 or angle >= 180 for angle in (a, b, c)) or abs(a + b + c - 180) >= 0.001:
+                raise ValueError()
         if clean.get("imageData"):
             data = base64.b64decode(clean["imageData"], validate=True)
             if len(data) > 8 * 1024 * 1024 or not data.startswith((b"\x89PNG", b"\xff\xd8", b"GIF8")):
