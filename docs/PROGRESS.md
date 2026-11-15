@@ -16,10 +16,17 @@ The signed v0.3 build is installed and launched on the connected iPad, preservin
 
 The verified companion/catalog checkpoint was pushed as `5589507`, followed by the native v0.3 release checkpoint. Actual subscription-backed concurrent generation, equation transcription, authenticated cloud save/list/load, and unauthorized-request rejection were checked. Only a synthetic demo object was uploaded during validation; no SQL warehouse was started.
 
-## In progress — physical-device feedback
+## In progress — v0.3.1 physical-device feedback
 
 - Repair shape recognition timing so completing a shape never removes the following stroke. Improve circles, rectangles, and triangles while retaining drawing orientation.
 - Replace the confusing native Insert Space menu with visible mixed ink/object selection actions. Extend lasso selection to handwriting and objects together.
+- Keep submitted voice jobs autonomous when leaving Magic Pen; a new reference can start a separate voice request.
+- Add searchable starter/local/cloud catalogs with grid/list views, previews, and clearer Databricks save actions.
+- Expose the actual per-request thinking level (the existing default was already low).
+- Align the bottom controls, remove idle tool-description text, and make selected page regions draggable.
+- Remove the 300-page PDF cutoff, move large-book operations off the UI thread, and verify search/printout beyond page 300.
+
+The shape suite passed all 20 checks; mixed selection passed 10 unit checks plus ink/object clipboard UI checks. Broader integration and the new PDF/catalog checks remain in progress before the next install and release.
 
 ## Shipped — v0.2
 
