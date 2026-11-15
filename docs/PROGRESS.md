@@ -1,5 +1,15 @@
 # MagiBoard development checkpoints
 
+## Shipped — v0.4 realtime voice, exercise crops, and plotting
+
+- Added API-backed GPT Realtime voice with a private Mac-side key, short-lived native client credentials, direct simple edits, and independent background tasks for images, PDFs, research, and custom objects.
+- Captured spatial references per spoken turn, rejected duplicate/interrupted tool calls, retained tool-result continuation context, and preserved three overlapping jobs through tool changes.
+- Replaced handwriting selection rectangles with pressure/mask-aware stroke highlights.
+- Added question-level original PDF crops using spatial exercise labels, including bounded continuation pages and safe rejection of ambiguous boundaries.
+- Repaired graph parameters, expression parsing, duplicate transforms, default vertical ranges, small/large tick labels, and visible errors. Advanced graph requests use custom interactive widgets.
+
+The final signed build was installed on the connected iPad. All **97 native unit tests** and **77 companion tests** passed; targeted Settings UI checks passed. Live checks verified Realtime credential minting, both function tools over the native WebSocket API, synthesized speech to a canvas command with transcription, and a numerical phase-portrait widget. Actual textbook question crops were visually verified without publishing the private source. Physical Realtime microphone, echo, and interruption behavior still need the user's hands-on check.
+
 ## Shipped — v0.3 interaction and object refinement
 
 Implemented:

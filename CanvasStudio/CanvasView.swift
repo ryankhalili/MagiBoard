@@ -75,6 +75,8 @@ final class CanvasHostView: UIView, PKCanvasViewDelegate, UIGestureRecognizerDel
     private var previousTool: CanvasTool = .pen
     private var toolSignature = ""
     private var inputSignature = ""
+    private var highlightedDrawingData = Data()
+    private var highlightedStrokeIndices: Set<Int> = []
     var onReference: (() -> Void)?
 
     init(store: NotebookStore) {
@@ -258,7 +260,6 @@ final class CanvasHostView: UIView, PKCanvasViewDelegate, UIGestureRecognizerDel
         surface.backgroundColor = backgroundColor
         surface.objects = store.notebook.objects
         surface.selectedIDs = store.selectedIDs
-        surface.mixedSelectionBounds = store.selectedStrokeIndices.isEmpty ? nil : store.selectionBounds
         surface.reference = store.tool == .magic ? store.reference?.cgRect : nil
         surface.pendingTasks = store.pendingTasks
         surface.dark = dark; surface.showGrid = store.settings.showGrid; surface.paperStyle = store.settings.paperStyle
@@ -330,7 +331,15 @@ final class CanvasHostView: UIView, PKCanvasViewDelegate, UIGestureRecognizerDel
         surface.zoom = ink.zoomScale
         surface.marquee = marquee
         surface.lassoPoints = lassoPoints
-        surface.mixedSelectionBounds = store.selectedStrokeIndices.isEmpty ? nil : store.selectionBounds
+        if highlightedStrokeIndices != store.selectedStrokeIndices ||
+            (!store.selectedStrokeIndices.isEmpty && highlightedDrawingData != store.notebook.drawingData) {
+            highlightedStrokeIndices = store.selectedStrokeIndices
+            highlightedDrawingData = store.notebook.drawingData
+            let strokes = store.worldInk.strokes.enumerated().compactMap {
+                highlightedStrokeIndices.contains($0.offset) ? $0.element : nil
+            }
+            surface.inkSelection.setDrawing(PKDrawing(strokes: strokes))
+        }
         surface.setNeedsDisplay()
         if isUITesting {
             let selectedObject = store.notebook.objects.first { store.selectedIDs.contains($0.id) }
@@ -950,13 +959,53 @@ enum StrokeShapeRecognizer {
 }
 
 @MainActor
+final class InkSelectionHighlight {
+    private var drawing = PKDrawing()
+    private var cachedImage: UIImage?
+    private var cachedRect = CGRect.null
+    private var cachedZoom: CGFloat = 1
+    private(set) var renderCount = 0
+    var isEmpty: Bool { drawing.strokes.isEmpty }
+
+    func setDrawing(_ drawing: PKDrawing) {
+        self.drawing = drawing
+        cachedImage = nil; cachedRect = .null
+    }
+
+    func draw(in context: CGContext, visible: CGRect, zoom: CGFloat, displayScale: CGFloat) {
+        guard !isEmpty, zoom > 0 else { return }
+        let inkBounds = drawing.bounds.insetBy(dx: -8 / zoom, dy: -8 / zoom)
+        let needed = visible.intersection(inkBounds)
+        guard !needed.isNull, !needed.isEmpty else { return }
+        if cachedImage == nil || !cachedRect.contains(needed) || zoom / cachedZoom < 0.5 || zoom / cachedZoom > 2 {
+            // Use PencilKit's silhouette rather than an approximate center line:
+            // pressure, marker shape, stroke transforms, and erased masks survive.
+            // Cache beyond the viewport so panning does not rasterize on every tick.
+            cachedRect = visible.insetBy(dx: -128 / zoom, dy: -128 / zoom).intersection(inkBounds)
+            let scale = min(zoom * max(1, displayScale), 2048 / max(cachedRect.width, cachedRect.height))
+            cachedImage = drawing.image(from: cachedRect, scale: max(0.001, scale))
+                .withTintColor(.systemBlue, renderingMode: .alwaysOriginal)
+            cachedZoom = zoom
+            renderCount += 1
+        }
+        guard let image = cachedImage else { return }
+        context.saveGState()
+        // This sits immediately underneath the untouched native ink. The blue
+        // halo extends around its actual edges; empty gaps remain empty.
+        context.setShadow(offset: .zero, blur: 5 / zoom, color: UIColor.systemBlue.withAlphaComponent(0.85).cgColor)
+        image.draw(in: cachedRect)
+        context.restoreGState()
+    }
+}
+
+@MainActor
 private final class CanvasSurfaceView: UIView {
     var objects: [CanvasObject] = []
     var selectedIDs: Set<UUID> = []
     var reference: CGRect?
     var marquee: CGRect?
     var lassoPoints: [CGPoint] = []
-    var mixedSelectionBounds: CGRect?
+    let inkSelection = InkSelectionHighlight()
     var pendingTasks: [CanvasTaskRegion] = []
     var cameraOffset: CGPoint = .zero
     var zoom: CGFloat = 1
@@ -994,8 +1043,8 @@ private final class CanvasSurfaceView: UIView {
             ObjectRenderer.shared.draw(object, in: context, dark: dark)
             if selectedIDs.contains(object.id) { drawSelection(object.rect, context: context) }
         }
+        inkSelection.draw(in: context, visible: visible, zoom: zoom, displayScale: window?.screen.scale ?? traitCollection.displayScale)
         if let area = marquee { drawRegion(area, context: context, purple: false) }
-        if let area = mixedSelectionBounds { drawRegion(area.insetBy(dx: -6 / zoom, dy: -6 / zoom), context: context, purple: false) }
         if let first = lassoPoints.first {
             context.saveGState()
             context.move(to: first)
@@ -1034,7 +1083,7 @@ private final class CanvasSurfaceView: UIView {
         context.saveGState()
         context.setStrokeColor(UIColor.systemBlue.cgColor); context.setLineWidth(1.5 / zoom)
         context.addPath(UIBezierPath(roundedRect: rect.insetBy(dx: -5 / zoom, dy: -5 / zoom), cornerRadius: 8 / zoom).cgPath); context.strokePath()
-        if selectedIDs.count == 1 && mixedSelectionBounds == nil {
+        if selectedIDs.count == 1 && inkSelection.isEmpty {
             let handle = CGRect(x: rect.maxX - 5 / zoom, y: rect.maxY - 5 / zoom, width: 10 / zoom, height: 10 / zoom)
             context.setFillColor(UIColor.white.cgColor); context.fillEllipse(in: handle); context.strokeEllipse(in: handle)
         }

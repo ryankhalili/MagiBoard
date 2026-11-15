@@ -180,4 +180,121 @@ final class PDFLibraryTests: XCTestCase {
         let fallback = await fallbackLibrary.textContext(query: "Find chapter 2 exercise 2")
         XCTAssertTrue(fallback.contains("page 9,")); XCTAssertTrue(fallback.contains("sapphire oscillator frequency"))
     }
+
+    func testQuestionCropUsesSpatialLabelsPreservesDiagramAndExcludesNeighbors() async throws {
+        let root = try directory(), source = root.appendingPathComponent("Original spatial exercises.pdf")
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 612, height: 792))
+        try renderer.writePDF(to: source) { context in
+            context.beginPage()
+            ("Chapter 2\nOriginal exercises" as NSString).draw(at: CGPoint(x: 40, y: 40), withAttributes: [.font: UIFont.systemFont(ofSize: 18)])
+            context.beginPage()
+            ("Problems" as NSString).draw(at: CGPoint(x: 40, y: 40), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 20)])
+            // Deliberately emit all labels before any paragraphs, just as a
+            // separate margin column in a real PDF content stream may do.
+            for (label, y) in [("2.1", 100), ("2.2", 250), ("2.3", 500)] {
+                (label as NSString).draw(at: CGPoint(x: 65, y: y), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 16)])
+            }
+            ("First neighboring exercise. See Figure 2.2 for context." as NSString).draw(at: CGPoint(x: 110, y: 100), withAttributes: [.font: UIFont.systemFont(ofSize: 16)])
+            ("Second exercise: preserve this original diagram." as NSString).draw(at: CGPoint(x: 110, y: 250), withAttributes: [.font: UIFont.systemFont(ofSize: 16)])
+            UIColor.red.setFill(); context.cgContext.fill(CGRect(x: 220, y: 330, width: 75, height: 55))
+            ("Final condition for the second exercise." as NSString).draw(at: CGPoint(x: 110, y: 440), withAttributes: [.font: UIFont.systemFont(ofSize: 16)])
+            ("Third neighboring exercise must remain outside." as NSString).draw(at: CGPoint(x: 110, y: 500), withAttributes: [.font: UIFont.systemFont(ofSize: 16)])
+        }
+        let original = try Data(contentsOf: source)
+        let library = PDFLibrary(directory: root.appendingPathComponent("Library"))
+        try await library.importDocument(url: source)
+        let item = try XCTUnwrap(library.documents.first)
+        let response = AgentResponse(message: "Insert exercise", operations: [
+            AgentOperation(type: "insertPDF", documentID: item.id, x: -120, y: 300, chapter: 2, question: "2")])
+        let result = try await library.resolvingPDFInsertions(response, documents: [item], reference: .init())
+        let object = try XCTUnwrap(result.operations.first?.object)
+        XCTAssertEqual(result.operations.first?.type, "add")
+        XCTAssertEqual(object.properties["page"], 2)
+        XCTAssertEqual(object.properties["chapter"], 2)
+        XCTAssertLessThan(try XCTUnwrap(object.properties["pdfCropHeight"]), 0.4)
+        XCTAssertEqual(object.x, -120); XCTAssertEqual(object.y, 300)
+        XCTAssertTrue(object.text.contains("Second exercise")); XCTAssertTrue(object.text.contains("Final condition"))
+        XCTAssertFalse(object.text.contains("First neighboring")); XCTAssertFalse(object.text.contains("Third neighboring"))
+        XCTAssertNoThrow(try NotebookValidation.validate(object))
+        XCTAssertEqual(try Data(contentsOf: item.url), original)
+        let image = try XCTUnwrap(UIImage(data: try XCTUnwrap(object.imageData)))
+        XCTAssertLessThan(image.size.height, 600)
+        XCTAssertLessThan(image.size.width, 1200, "Outer blank paper should be trimmed")
+        let cgImage = try XCTUnwrap(image.cgImage), width = cgImage.width, height = cgImage.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let hasRed = bytes.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return stride(from: 0, to: buffer.count, by: 4).filter { buffer[$0] > 200 && buffer[$0 + 1] < 80 && buffer[$0 + 2] < 80 }.count > 1000
+        }
+        XCTAssertTrue(hasRed, "Original non-text PDF graphics must survive cropping")
+        let context = await library.textContext(query: "Find problem 2.2")
+        XCTAssertTrue(context.contains("VERIFIED EXERCISE")); XCTAssertTrue(context.contains("page 2,"))
+        XCTAssertTrue(context.contains("Second exercise")); XCTAssertFalse(context.contains("First neighboring"))
+        var wrongHint = response
+        wrongHint.operations[0].page = 1
+        let corrected = try await library.resolvingPDFInsertions(wrongHint, documents: [item], reference: .init())
+        XCTAssertEqual(corrected.operations.first?.object?.properties["page"], 2)
+    }
+
+    func testQuestionLookupRejectsAmbiguityUnclearEndAndInvalidMetadata() async throws {
+        let root = try directory(), source = root.appendingPathComponent("Repeated exercises.pdf")
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 612, height: 792))
+        try renderer.writePDF(to: source) { context in
+            for chapter in [1, 2] {
+                context.beginPage()
+                ("Chapter \(chapter)\nProblems" as NSString).draw(at: CGPoint(x: 40, y: 40), withAttributes: [.font: UIFont.systemFont(ofSize: 18)])
+                ("2. A repeated exercise number." as NSString).draw(at: CGPoint(x: 60, y: 160), withAttributes: [.font: UIFont.systemFont(ofSize: 16)])
+                ("3. A final exercise with no detectable next boundary." as NSString).draw(at: CGPoint(x: 60, y: 300), withAttributes: [.font: UIFont.systemFont(ofSize: 16)])
+            }
+        }
+        let library = PDFLibrary(directory: root.appendingPathComponent("Library"))
+        try await library.importDocument(url: source)
+        let item = try XCTUnwrap(library.documents.first)
+        for operation in [
+            AgentOperation(type: "insertPDF", documentID: item.id, question: "2"),
+            AgentOperation(type: "insertPDF", documentID: item.id, chapter: 2, question: "3"),
+            AgentOperation(type: "insertPDF", documentID: item.id, chapter: 2, question: "1.2"),
+            AgentOperation(type: "insertPDF", documentID: item.id, chapter: 2, question: "2(b)"),
+            AgentOperation(type: "insertPDF", documentID: item.id, chapter: -2, question: "2"),
+            AgentOperation(type: "insertPDF", documentID: item.id, chapter: 2)
+        ] {
+            do {
+                _ = try await library.resolvingPDFInsertions(AgentResponse(message: "Do not partly apply", operations: [AgentOperation(type: "add", object: CanvasObject(title: "Untouched")), operation]), documents: [item], reference: .init())
+                XCTFail("Ambiguous or malformed exercise accepted: \(operation)")
+            } catch { XCTAssertFalse(error.localizedDescription.isEmpty) }
+        }
+        let resolved = try await library.resolvingPDFInsertions(AgentResponse(message: "Precise", operations: [
+            AgentOperation(type: "insertPDF", documentID: item.id, chapter: 2, question: "2")]), documents: [item], reference: .init())
+        XCTAssertEqual(resolved.operations.first?.object?.properties["page"], 2)
+        let fullPage = try await library.resolvingPDFInsertions(AgentResponse(message: "Explicit page fallback", operations: [
+            AgentOperation(type: "insertPDF", documentID: item.id, page: 2)]), documents: [item], reference: .init())
+        XCTAssertTrue(fullPage.operations.first?.object?.text.contains("final exercise") == true)
+        XCTAssertNil(fullPage.operations.first?.object?.properties["pdfCropHeight"])
+        let legacy = try JSONDecoder().decode(AgentOperation.self, from: Data(#"{"type":"insertPDF","page":2}"#.utf8))
+        XCTAssertNil(legacy.question); XCTAssertNil(legacy.chapter)
+    }
+
+    func testQuestionCropIncludesContinuationBeforeNextExerciseOnFollowingPage() async throws {
+        let root = try directory(), source = root.appendingPathComponent("Continued exercises.pdf")
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 612, height: 792))
+        try renderer.writePDF(to: source) { context in
+            context.beginPage()
+            ("Chapter 2\nProblems" as NSString).draw(at: CGPoint(x: 40, y: 40), withAttributes: [.font: UIFont.systemFont(ofSize: 18)])
+            ("2.2 The original question begins here." as NSString).draw(at: CGPoint(x: 60, y: 600), withAttributes: [.font: UIFont.systemFont(ofSize: 16)])
+            context.beginPage()
+            ("Its continuation and final condition." as NSString).draw(at: CGPoint(x: 100, y: 90), withAttributes: [.font: UIFont.systemFont(ofSize: 16)])
+            ("2.3 The next question is excluded." as NSString).draw(at: CGPoint(x: 60, y: 250), withAttributes: [.font: UIFont.systemFont(ofSize: 16)])
+        }
+        let library = PDFLibrary(directory: root.appendingPathComponent("Library"))
+        try await library.importDocument(url: source)
+        let item = try XCTUnwrap(library.documents.first)
+        let response = try await library.resolvingPDFInsertions(AgentResponse(message: "Original question", operations: [
+            AgentOperation(type: "insertPDF", documentID: item.id, question: "2.2")]), documents: [item], reference: .init())
+        let object = try XCTUnwrap(response.operations.first?.object)
+        XCTAssertEqual(object.properties["pdfPageCount"], 2)
+        XCTAssertTrue(object.text.contains("begins here")); XCTAssertTrue(object.text.contains("final condition"))
+        XCTAssertFalse(object.text.contains("next question"))
+        XCTAssertLessThanOrEqual(try XCTUnwrap(UIImage(data: try XCTUnwrap(object.imageData))).size.height, 1600)
+    }
 }

@@ -19,6 +19,11 @@ struct StudioView: View {
     @StateObject private var agent = ConnectionClient()
     @StateObject private var voice = VoiceInput()
     @StateObject private var conversation = ConversationVoice()
+    @StateObject private var realtime = RealtimeVoice()
+    @StateObject private var realtimeCanvas = RealtimeCanvasSession()
+    @State private var startingVoice = false
+    private var voiceActive: Bool { startingVoice || conversation.active || realtime.active || realtime.starting }
+    private var conversationError: String { !realtime.error.isEmpty ? realtime.error : conversation.error }
     @State private var ribbonTab = "Draw"
     @State private var showSettings = false
     @State private var showLibrary = false
@@ -48,9 +53,11 @@ struct StudioView: View {
             Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
             NativeCanvas(store: store) {
                 promptFocused = false
-                if conversation.active && conversation.canStartNewReference {
+                if realtime.active || realtime.starting {
+                    realtime.updateContext(realtimeCanvas.focus(store: store, library: library))
+                } else if conversation.active && conversation.canStartNewReference {
                     stopConversation(); startConversation()
-                } else if store.settings.voiceMode && !conversation.active { startConversation() }
+                } else if store.settings.voiceMode && !voiceActive { startConversation() }
             }.ignoresSafeArea(.keyboard).ignoresSafeArea(edges: .bottom)
             VStack(spacing: 0) {
                 topBar
@@ -455,29 +462,32 @@ struct StudioView: View {
                     Button("Got it") { store.settings.magicOnboardingSeen = true }.font(.caption.weight(.semibold)).accessibilityIdentifier("magicGotIt")
                 }.padding(10).background(accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
             }
-            if prompt.isEmpty && agent.reply.isEmpty && !conversation.active {
+            if prompt.isEmpty && agent.reply.isEmpty && !voiceActive {
                 HStack(spacing: 7) {
                     suggestion("Plot a wave", prompt: "Create a graph of sin(x) here")
                     suggestion("Make it interactive", prompt: "Make an interactive coin that doubles when tapped")
                 }
             }
-            if conversation.active {
+            if voiceActive {
                 VStack(alignment: .leading, spacing: 9) {
                     HStack(spacing: 10) {
                         Image(systemName: "waveform").foregroundStyle(accent)
                             .symbolEffect(.variableColor, options: .repeating)
-                        Text(conversation.stateLabel).font(.system(size: 15, weight: .medium))
+                        Text(realtime.active || realtime.starting ? realtime.stateLabel : (startingVoice ? "Connecting voice…" : conversation.stateLabel)).font(.system(size: 15, weight: .medium))
                         Spacer()
                         Button("End voice", systemImage: "stop.circle.fill") { stopConversation() }
                             .font(.system(size: 12, weight: .medium)).accessibilityIdentifier("endVoice")
                     }
-                    if !conversation.transcript.isEmpty {
-                        Text(conversation.transcript).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(3)
+                    if !(realtime.active ? realtime.transcript : conversation.transcript).isEmpty {
+                        Text(realtime.active ? realtime.transcript : conversation.transcript).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(3)
                     } else {
-                        Text("Speak an instruction, then pause. MagiBoard will make the change and listen again.")
+                        Text(realtime.active ? "Speak naturally. Tap another area and keep talking while earlier tasks work." : "Speak an instruction, then pause. MagiBoard will make the change and listen again.")
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                     }
-                    ProgressView(value: conversation.level).tint(accent).accessibilityLabel("Microphone level")
+                    ProgressView(value: realtime.active ? realtime.level : conversation.level).tint(accent).accessibilityLabel("Microphone level")
+                    if realtime.active && !realtime.reply.isEmpty {
+                        Text(realtime.reply).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    }
                     if conversation.canStartNewReference {
                         Button("New request", systemImage: "plus.bubble") { stopConversation(); startConversation() }
                             .font(.caption.weight(.medium)).accessibilityIdentifier("newVoiceRequest")
@@ -509,8 +519,8 @@ struct StudioView: View {
                         .accessibilityLabel("Send to Magic Pen").accessibilityIdentifier("magicSend")
                 }
             }
-            if !voice.error.isEmpty || !conversation.error.isEmpty {
-                Text(!voice.error.isEmpty ? voice.error : conversation.error)
+            if !voice.error.isEmpty || !conversationError.isEmpty {
+                Text(!voice.error.isEmpty ? voice.error : conversationError)
                     .font(.system(size: 12)).foregroundStyle(.red).lineLimit(5).textSelection(.enabled)
             } else if !agent.reply.isEmpty {
                 Text(agent.reply).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
@@ -550,10 +560,31 @@ struct StudioView: View {
         // belong to the task list and keep running when this session is closed.
         voiceTasks.detach()
         conversation.stop()
+        realtime.stop(); realtimeCanvas.reset(); startingVoice = false
     }
     private func startConversation() {
-        guard store.settings.aiEnabled, !conversation.active else { return }
+        guard store.settings.aiEnabled, !voiceActive else { return }
         voice.stop(); voice.clearError(); promptFocused = false; store.tool = .magic
+        realtime.clearError(); conversation.clearError()
+        let useRealtime = store.settings.voiceProvider == "realtime" || (store.settings.voiceProvider == "automatic" && agent.realtimeAvailable)
+        if useRealtime {
+            startingVoice = true
+            let session = voiceTasks.begin()
+            realtimeCanvas.reset()
+            let context = realtimeCanvas.focus(store: store, library: library)
+            realtime.onResponseCreated = { id in realtimeCanvas.responseCreated(id) }
+            Task {
+                guard voiceTasks.contains(session) else { return }
+                await realtime.start(agent: agent, settings: store.settings, initialContext: context,
+                    onSpeechStart: { realtime.updateContext(realtimeCanvas.speechStarted(store: store, library: library)) },
+                    onToolCall: { name, arguments, _, responseID in
+                        realtimeCanvas.perform(name: name, arguments: arguments, responseID: responseID,
+                            store: store, library: library, agent: agent, voice: realtime)
+                    })
+                if voiceTasks.contains(session) { startingVoice = false }
+            }
+            return
+        }
         conversation.localeIdentifier = store.settings.speechLocale
         conversation.spokenReplies = store.settings.spokenReplies
         let session = voiceTasks.begin()

@@ -152,6 +152,13 @@ struct StudioSettingsView: View {
         } header: { Text("AI response") }
         footer: { Text("Fast is the default for everyday canvas edits. Higher levels give complex requests more reasoning time and can take longer. This applies to new requests; image generation and web research may still take time.") }
         Section("Conversation") {
+            Picker("Voice provider", selection: $store.settings.voiceProvider) {
+                Text("Automatic").tag("automatic")
+                Text("GPT Realtime · API key").tag("realtime")
+                Text("Apple speech + canvas agent").tag("native")
+            }.accessibilityIdentifier("voiceProvider")
+            Text(agent.realtimeAvailable ? "GPT Realtime is available through your Mac companion." : "GPT Realtime needs an API key configured on the Mac companion.")
+                .font(.caption).foregroundStyle(.secondary)
             Picker("When holding Magic Pen", selection: $store.settings.voiceMode) {
                 Text("Open voice conversation").tag(true)
                 Text("Open text input").tag(false)
@@ -169,7 +176,7 @@ struct StudioSettingsView: View {
         Section {
             Label("Type quietly in a classroom", systemImage: "keyboard")
                 .font(.subheadline)
-            Text("You can switch between typing and speaking in Magic Pen. Speech uses Apple recognition, with an online fallback when on-device recognition is unavailable.")
+            Text("Automatic uses GPT Realtime when your companion has an API key, otherwise Apple speech. Realtime streams microphone audio to OpenAI and uses API credits. Image generation and longer canvas jobs continue independently. Dictation uses Apple recognition.")
                 .font(.subheadline).foregroundStyle(.secondary)
         }
     }

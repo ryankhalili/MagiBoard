@@ -79,7 +79,19 @@ struct ObjectInspector: View {
                                 caption("LIVE PARAMETERS")
                                 if !isDeclared("amplitude", object) { parameter(object, key: "amplitude", label: "Amplitude", fallback: 1, range: 0.1...5) }
                                 if !isDeclared("frequency", object) { parameter(object, key: "frequency", label: "Frequency", fallback: 1, range: 0.1...5) }
-                                if !isDeclared("c", object) { parameter(object, key: "c", label: "Vertical shift · C", fallback: 0, range: -5...5) }
+                                if !isDeclared("c", object), PlotExpression(object.text).variables.contains("c") || (object.properties["c"] ?? 0) != 0 {
+                                    parameter(object, key: "c", label: PlotExpression(object.text).variables.contains("c") ? "Parameter c" : "Legacy shift · C", fallback: 0, range: -5...5)
+                                }
+                                if !isDeclared("offset", object) { parameter(object, key: "offset", label: "Vertical shift", fallback: 0, range: -5...5) }
+                                Button("Fit vertical range automatically") {
+                                    update(object.id) {
+                                        for key in ["yMin", "yMax", "yRange"] { $0.properties.removeValue(forKey: key) }
+                                        $0.propertySpecs.removeAll { ["yMin", "yMax", "yRange"].contains($0.key) }
+                                    }
+                                }.font(.caption).accessibilityIdentifier("graphAutoRange")
+                                if let error = GraphPlot(formula: object.text, properties: object.properties).error {
+                                    Text(error).font(.caption).foregroundStyle(.orange)
+                                }
                             }
                         }
                         if object.kind == "shape" {
@@ -192,11 +204,12 @@ struct ObjectInspector: View {
         }
     }
     private func extraKeys(_ object: CanvasObject) -> [String] {
-        let standard: Set<String> = ["amplitude", "frequency", "c", "angleA", "angleB", "angleC", "fontSize", "opacity", "fillOpacity", "bold", "card", "strokeWidth", "cornerRadius"]
+        let standard: Set<String> = ["amplitude", "frequency", "c", "offset", "angleA", "angleB", "angleC", "fontSize", "opacity", "fillOpacity", "bold", "card", "strokeWidth", "cornerRadius"]
         let recognizedOutline = (object.properties["recognizedOutline"] ?? 0) > 0
         return object.properties.keys.filter {
             let outlineMetadata = recognizedOutline && ($0 == "recognizedOutline" || $0 == "vertexCount" || $0.range(of: "^vertex[0-3][XY]$", options: .regularExpression) != nil)
-            return !outlineMetadata && !isDeclared($0, object) && (object.kind == "widget" || !standard.contains($0))
+            let pdfMetadata = object.kind == "image" && ($0.hasPrefix("pdf") || $0 == "questionNumber" || $0 == "chapter")
+            return !outlineMetadata && !pdfMetadata && !isDeclared($0, object) && (object.kind == "widget" || !standard.contains($0))
         }.sorted()
     }
     private func hasExtraProperties(_ object: CanvasObject) -> Bool { !extraKeys(object).isEmpty }
@@ -338,9 +351,9 @@ private struct ObjectTextEditor: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 14) {
                 if isGraph {
-                    Text("Use x, powers, parentheses, sin, cos, tan, sqrt, exp, log and ln.").font(.subheadline).foregroundStyle(.secondary)
-                    if !text.isEmpty, PlotExpression(text).evaluate(x: 1).isNaN && PlotExpression(text).evaluate(x: 2).isNaN {
-                        Label("Check the expression and its domain.", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange)
+                    Text("Use x, numeric parameters, powers, parentheses, sin, cos, tan, sqrt, exp, log and ln. For example: a*x^2+b*x+c.").font(.subheadline).foregroundStyle(.secondary)
+                    if let object = store.notebook.objects.first(where: { $0.id == objectID }), let diagnostic = GraphPlot(formula: text, properties: object.properties).error {
+                        Label(diagnostic, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange)
                     }
                 }
                 TextEditor(text: $text)

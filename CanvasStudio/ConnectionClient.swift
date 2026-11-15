@@ -7,6 +7,8 @@ struct BridgeStatus: Decodable {
     var connected: Bool
     var provider: String?
     var plan: String?
+    var realtimeAvailable: Bool?
+    var realtimeModel: String?
 }
 struct DeviceLogin: Decodable {
     var verificationUrl: String?
@@ -31,6 +33,7 @@ struct CanvasAgentJob: Identifiable, Equatable {
 final class ConnectionClient: ObservableObject {
     @Published var busy = false
     @Published var connected = false
+    @Published var realtimeAvailable = false
     @Published var connectionLabel = "Not connected"
     @Published var reply = ""
     @Published var lastFailure = false
@@ -69,11 +72,12 @@ final class ConnectionClient: ObservableObject {
             let state: BridgeStatus = try await request("status", settings: settings)
             guard authEpoch == epoch, !Task.isCancelled else { return }
             connected = state.connected
+            realtimeAvailable = state.realtimeAvailable ?? false
             if connected { login = nil }
             connectionLabel = connected ? "ChatGPT connected\(state.plan.map { " · \($0.capitalized)" } ?? "")" : "Companion ready · sign in"
         } catch {
             guard authEpoch == epoch, !Task.isCancelled else { return }
-            connected = false; connectionLabel = error.localizedDescription
+            connected = false; realtimeAvailable = false; connectionLabel = error.localizedDescription
         }
     }
     func signIn(_ settings: StudioSettings) async {
@@ -94,7 +98,7 @@ final class ConnectionClient: ObservableObject {
         cancel()
         let previous = store.settings
         store.settings.bridgeToken = ""; store.settings.bridgeURL = ""
-        connected = false; login = nil; connectionLabel = "Disconnected from this iPad"
+        connected = false; realtimeAvailable = false; login = nil; connectionLabel = "Disconnected from this iPad"
         Task {
             struct Ack: Decodable {}
             do {
@@ -129,12 +133,13 @@ final class ConnectionClient: ObservableObject {
 
     @discardableResult
     func send(_ prompt: String, store: NotebookStore, library: PDFLibrary,
+              referenceOverride: CanvasRect? = nil, selectedIDsOverride: Set<UUID>? = nil,
               completion: ((String, Bool) -> Void)? = nil) -> UUID? {
         let clean = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, store.settings.aiEnabled else { return nil }
         guard tasks.count < 4 else { reply = "Four tasks are already running. Wait for one to finish."; return nil }
-        let requestID = UUID(), original = store.notebook, ids = store.selectedIDs
-        let reference = store.reference ?? store.viewport
+        let requestID = UUID(), original = store.notebook, ids = selectedIDsOverride ?? store.selectedIDs
+        let reference = referenceOverride ?? store.reference ?? store.viewport
         let settings = store.settings
         let job = CanvasAgentJob(id: requestID, notebookID: original.id, prompt: clean, reference: reference)
         jobs.append(job)

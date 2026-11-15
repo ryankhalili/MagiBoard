@@ -183,13 +183,14 @@ struct StudioSettings: Codable, Equatable {
     var compactHeader = false
     var magicOnboardingSeen = false
     var voiceMode = false
+    var voiceProvider = "automatic"
     var spokenReplies = true
     var speechLocale = "en-US"
     var bridgeURL = ""
     var bridgeToken = ""
     // The pairing secret lives in Keychain, never in notebook or settings JSON.
     enum CodingKeys: String, CodingKey {
-        case aiEnabled, reasoningEffort, darkMode, drawWithFinger, recognizeShapes, showGrid, paperStyle, toolbarCollapsed, compactHeader, magicOnboardingSeen, voiceMode, spokenReplies, speechLocale, bridgeURL
+        case aiEnabled, reasoningEffort, darkMode, drawWithFinger, recognizeShapes, showGrid, paperStyle, toolbarCollapsed, compactHeader, magicOnboardingSeen, voiceMode, voiceProvider, spokenReplies, speechLocale, bridgeURL
     }
     init() {}
     init(from decoder: Decoder) throws {
@@ -206,6 +207,8 @@ struct StudioSettings: Codable, Equatable {
         compactHeader = try c.decodeIfPresent(Bool.self, forKey: .compactHeader) ?? false
         magicOnboardingSeen = try c.decodeIfPresent(Bool.self, forKey: .magicOnboardingSeen) ?? false
         voiceMode = try c.decodeIfPresent(Bool.self, forKey: .voiceMode) ?? false
+        let provider = try c.decodeIfPresent(String.self, forKey: .voiceProvider) ?? "automatic"
+        voiceProvider = ["automatic", "realtime", "native"].contains(provider) ? provider : "automatic"
         spokenReplies = try c.decodeIfPresent(Bool.self, forKey: .spokenReplies) ?? true
         speechLocale = try c.decodeIfPresent(String.self, forKey: .speechLocale) ?? "en-US"
         bridgeURL = try c.decodeIfPresent(String.self, forKey: .bridgeURL) ?? ""
@@ -220,9 +223,14 @@ struct AgentOperation: Codable, Equatable {
     var page: Int?
     var x: Double?
     var y: Double?
-    init(type: String, id: UUID? = nil, object: CanvasObject? = nil, documentID: UUID? = nil, page: Int? = nil, x: Double? = nil, y: Double? = nil) {
+    /// Exercise identities are resolved against the local PDF text geometry.
+    /// The agent never supplies a guessed crop rectangle.
+    var chapter: Int?
+    var question: String?
+    init(type: String, id: UUID? = nil, object: CanvasObject? = nil, documentID: UUID? = nil, page: Int? = nil, x: Double? = nil, y: Double? = nil, chapter: Int? = nil, question: String? = nil) {
         self.type = type; self.id = id; self.object = object
         self.documentID = documentID; self.page = page; self.x = x; self.y = y
+        self.chapter = chapter; self.question = question
     }
 }
 struct AgentResponse: Codable, Equatable {

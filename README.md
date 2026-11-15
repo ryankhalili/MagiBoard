@@ -1,17 +1,18 @@
-# MagiBoard · v0.3.1
+# MagiBoard · v0.4.0
 
 A native iPad whiteboard for handwriting, interactive objects, and an AI assistant that works where you point. Built for MadHacks with original Swift and Python code; no whiteboard application's source was copied or forked.
 
 ## What you can do
 
-- Write with Apple Pencil using PencilKit pens, pencil, highlighter, and eraser. The lasso selects handwriting and objects together, with visible copy, paste, duplicate, delete, and drag actions. Pan, zoom, resize objects, and undo.
+- Write with Apple Pencil using PencilKit pens, pencil, highlighter, and eraser. The lasso selects handwriting and objects together; selected ink highlights its actual stroke silhouette, including pressure and erased gaps. Copy, paste, duplicate, delete, move, pan, zoom, and undo.
 - Optionally turn closed pen or pencil strokes into clean circles, rectangles, or triangles when you lift the Pencil. Recognition preserves the drawn orientation; Undo restores the original ink.
 - Organize notebooks in the sliding library sidebar. Add named page regions, choose blank/dotted/ruled/grid paper, and collapse the drawing toolbar.
 - Create editable geometry, graphs, text, images, and bare mathematical expressions. The native equation editor previews fractions, scripts, roots, integrals, sums, Greek letters, and more as you type, with a math keyboard accessory and clear syntax errors.
+- Plot explicit functions with named coefficients, scientific notation, automatic vertical fitting, readable tick labels, and visible expression errors. Advanced phase portraits, differential-equation simulations, and 3D requests use original interactive widgets rather than the native single-function plotter; generated mathematical content still needs checking.
 - Build interactive HTML objects with sliders, number fields, switches, and choices. While **Interact** is enabled, an object can create, duplicate, or update real canvas objects through a bounded document API—for example, a coin that duplicates onto the whiteboard.
 - Focus Magic Pen on a point or rectangle and type a request. Up to four tasks can run while you keep writing or move elsewhere; each keeps its original reference and appears in the task list. Leaving Magic Pen does not cancel submitted work. In voice mode, speak a request, hear the reply, and continue hands-free; selecting a new reference lets you start another request while previous work continues.
 - Browse 16 original starter objects and local/cloud libraries with search, kind filters, previews, and grid/list views. Save a reusable local object, share an editable `.magiboardobject` package, or explicitly save a version to Databricks through the configured Mac companion.
-- Search imported PDF references, locate chapter exercises through bookmarks and problem labels, place original pages on the canvas, and write over them. Import images and export a region as PNG/PDF or a complete editable notebook.
+- Search imported PDF references, locate and crop original exercises through bookmarks, problem labels, and PDF text geometry, or place complete pages on the canvas, and write over them. Import images and export a region as PNG/PDF or a complete editable notebook.
 
 Settings are organized into Account, Voice & Magic, Canvas, Storage, and About. Drawing works without an AI connection; a small, explicitly labeled offline command set demonstrates common geometry edits and example objects.
 
@@ -54,9 +55,9 @@ The optional **Databricks** tab in Object catalog uses a configured Unity Catalo
 
 ## Voice
 
-Choose **Settings → Voice & Magic → Open voice conversation**, then hold Magic Pen. The app listens for a request, sends the recognized text to Codex, applies valid canvas changes, speaks a reply, and listens again. You can stop the conversation or use text input instead. Speech language and spoken replies are configurable.
+Choose **Settings → Voice & Magic → Voice provider**. Automatic uses GPT Realtime when the Mac companion has an API key configured; Apple speech remains available explicitly. Start Voice in Magic Pen, point to a reference, and speak naturally. Simple native edits run directly; images, research, PDF exercises, and custom widgets become independent canvas tasks. New spoken turns capture their own reference, so changing focus does not redirect earlier work.
 
-This version uses **Apple speech recognition → Codex text requests → Apple speech synthesis**. It is not OpenAI speech-to-speech streaming. A real probe of the installed Codex runtime rejected subscription-only realtime audio with an API-key requirement; a separate API-backed realtime integration is not included. Recognition requests on-device processing when supported and can fall back to Apple's speech service. See [voice integration findings](bridge/VOICE_NOTES.md).
+**GPT Realtime uses the OpenAI API and API credits**, separately from the ChatGPT subscription used for background canvas agents. The permanent key stays on the Mac; the paired iPad receives a short-lived credential and streams audio directly to OpenAI. Stop closes the audio connection; backgrounding, audio interruptions, ten minutes of use, or ninety seconds of inactivity also end it. Submitted canvas jobs continue independently. Dictation and the Apple voice provider use native recognition and synthesis. See [voice setup and findings](bridge/VOICE_NOTES.md).
 
 ## Test
 
@@ -75,8 +76,8 @@ Standalone model, store, and PDF checks are also available in `Tests/`. See [val
 - Interactive objects run isolated, network-blocked HTML/JavaScript. Their typed canvas actions are validated, undoable, and available only in interaction mode. They do not provide arbitrary native code, Python, shell access, or a persistent backend. Transient widget state may reset on reload; exports are static.
 - The original equation typesetter supports a documented [LaTeX subset](docs/ARCHITECTURE.md#equations), not full TeX. Matrices, cases/aligned environments, custom macros, and packages are unsupported. Handwriting conversion requires an explicit visual AI request. GIF imports are static; HTML objects can animate.
 - Concurrent tasks preserve unrelated edits and ink. A task that tries to change an object edited since its request is rejected and must be retried; this is not automatic collaborative merging.
-- AI needs the paired Mac and internet. Native voice is turn-based and has recognition/network latency; microphone behavior and Pencil feel need testing on the actual iPad.
-- The Databricks catalog needs separate Mac-side setup and stores object snapshots only. Notebook cloud sync, collaboration, SQL data charts, API-key settings, standalone iPad Codex execution, and an extension marketplace are not implemented. The companion's authenticated local HTTP transport is intended for a trusted network.
+- AI needs the paired Mac and internet. Voice quality, echo cancellation, interruption behavior, and Pencil feel still need hands-on device testing. Realtime API access requires a valid configured key; expired keys produce a connection error, and Apple speech remains selectable.
+- The Databricks catalog needs separate Mac-side setup and stores object snapshots only. Notebook cloud sync, collaboration, SQL data charts, in-app API-key provisioning, standalone iPad Codex execution, and an extension marketplace are not implemented. The companion's authenticated local HTTP transport is intended for a trusted network.
 
 ## Source and rights
 

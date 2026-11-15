@@ -292,6 +292,32 @@ final class AgentTaskTests: XCTestCase {
         }
     }
 
+    func testThreeQueuedVoiceTasksUseCapturedReferencesAndFinishIndependently() async throws {
+        let (store, library, transport, client) = try environment()
+        let received = started(transport, count: 3)
+        let completed = expectation(description: "All three detached voice tasks complete")
+        completed.expectedFulfillmentCount = 3
+        for index in 0..<3 {
+            let ref = CanvasRect(x: Double(index * 400), y: Double(index * -200), width: 160, height: 90)
+            XCTAssertNotNil(client.send("Voice task \(index)", store: store, library: library, referenceOverride: ref, selectedIDsOverride: []) { _, failed in
+                XCTAssertFalse(failed); completed.fulfill()
+            })
+        }
+        store.reference = CanvasRect(x: -8000, y: 6000); store.tool = .pen
+        await fulfillment(of: [received], timeout: 5)
+        for index in [2, 0, 1] {
+            let payload = try XCTUnwrap(transport.payload("Voice task \(index)"))
+            let reference = try XCTUnwrap(payload["reference"] as? [String: Double])
+            XCTAssertEqual(reference["x"], Double(index * 400))
+            XCTAssertEqual(reference["y"], Double(index * -200))
+            try transport.finish("Voice task \(index)", with: AgentResponse(message: "Done", operations: [AgentOperation(type: "add", object: CanvasObject(x: Double(index * 400)))]))
+        }
+        await fulfillment(of: [completed], timeout: 5)
+        XCTAssertEqual(client.jobs.filter { $0.state == .completed }.count, 3)
+        XCTAssertEqual(store.notebook.objects.count, 3)
+        XCTAssertEqual(store.tool, .pen); XCTAssertEqual(store.reference?.x, -8000)
+    }
+
     func testImageImportAppliesOrientationDownsamplesAndProducesPersistableObject() throws {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 3200, height: 1600), format: {
             let format = UIGraphicsImageRendererFormat(); format.scale = 1; return format

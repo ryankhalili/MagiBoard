@@ -80,6 +80,26 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(BridgeError):
             validate_response({"operations": [valid] * 5}, documents=documents)
 
+    def test_pdf_exercise_supports_chapter_and_question_without_page(self):
+        documents = [{"id": self.id, "pages": 400}]
+        operation = {"type": "insertPDF", "documentID": self.id, "chapter": 2, "question": " 2.2. ", "page": None}
+        result = validate_response({"operations": [operation]}, documents=documents)
+        self.assertEqual(result["operations"], [{"type": "insertPDF", "documentID": self.id, "chapter": 2, "question": "2.2"}])
+        operation.update(question="2", page=350)
+        self.assertEqual(validate_response({"operations": [operation]}, documents=documents)["operations"][0]["page"], 350)
+
+    def test_pdf_exercise_rejects_ambiguous_labels_invalid_hints_and_missing_target(self):
+        documents = [{"id": self.id, "pages": 400}]
+        operation = {"type": "insertPDF", "documentID": self.id, "chapter": 2, "question": "2"}
+        for change in ({"question": "2.2(b)"}, {"question": "../../secret"}, {"question": "0"}, {"question": 2},
+                       {"question": "2" * 33}, {"question": ""}, {"question": None}, {"page": 401},
+                       {"chapter": 1000}, {"chapter": 0}, {"chapter": True}, {"page": True}):
+            with self.subTest(change=change), self.assertRaises(BridgeError):
+                validate_response({"operations": [{**operation, **change}]}, documents=documents)
+        schema = output_schema()["properties"]["operations"]["items"]
+        self.assertIn("chapter", schema["required"])
+        self.assertIn("question", schema["required"])
+
 
 class ImageAttachmentTests(unittest.TestCase):
     def setUp(self):
@@ -122,9 +142,18 @@ class FakeAuth:
         return {"verificationUrl": "https://auth.openai.com/codex/device", "userCode": "test-only", "loginId": "id"}
 
 
+class FakeRealtime:
+    def create_session(self, payload):
+        if payload:
+            from realtime import RealtimeError
+            raise RealtimeError("Realtime session setup expects an empty JSON object.")
+        return {"token": "ek_fake_ephemeral", "model": "gpt-realtime-2", "expiresAt": 1060}
+
+
 class FakeBridge:
     token = "test-bearer-token"
     auth = FakeAuth()
+    realtime = FakeRealtime()
     def status(self):
         return {"connected": True, "provider": "chatgpt"}
     def generate(self, data):
@@ -185,6 +214,18 @@ class HTTPTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self.request("/unknown")
         self.assertEqual(ctx.exception.code, 404)
+
+    def test_realtime_http_contract_is_paired_and_cannot_override_session(self):
+        self.assertEqual(set(self.request("/realtime/session", {})), {"token", "model", "expiresAt"})
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.request("/realtime/session", {}, token="wrong")
+        self.assertEqual(ctx.exception.code, 401)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.request("/realtime/session", {"model": "other"})
+        self.assertEqual(ctx.exception.code, 422)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.request("/realtime/session", {}, headers={"Origin": "https://example.com"})
+        self.assertEqual(ctx.exception.code, 403)
 
     def test_cloud_catalog_http_contract(self):
         self.assertTrue(self.request("/catalog/status")["connected"])

@@ -7,6 +7,7 @@ final class ObjectRenderer {
     static let shared = ObjectRenderer()
     private let imageCache = NSCache<NSString, UIImage>()
     private let graphCache: NSCache<NSString, UIBezierPath> = { let cache = NSCache<NSString, UIBezierPath>(); cache.countLimit = 64; return cache }()
+    private let graphAnalysisCache: NSCache<NSString, GraphPlotCacheEntry> = { let cache = NSCache<NSString, GraphPlotCacheEntry>(); cache.countLimit = 64; return cache }()
     var widgetSnapshots: [UUID: UIImage] = [:]
 
     func draw(_ object: CanvasObject, in context: CGContext, dark: Bool = false) {
@@ -151,61 +152,63 @@ final class ObjectRenderer {
         drawCard(rect, context: context, dark: dark)
         text(object.title.isEmpty ? "Function" : object.title, in: CGRect(x: rect.minX + 22, y: rect.minY + 17, width: rect.width - 44, height: 26), font: .systemFont(ofSize: 16, weight: .semibold), color: foreground)
         let formula = object.text.isEmpty ? "sin(x)" : object.text
-        text("y = \(formula)" + ((object.properties["c"] ?? 0) == 0 ? "" : String(format: "  + %.1f", object.properties["c"] ?? 0)), in: CGRect(x: rect.minX + 22, y: rect.minY + 45, width: rect.width - 44, height: 24), font: .monospacedSystemFont(ofSize: 13, weight: .regular), color: ink)
-        let plot = CGRect(x: rect.minX + 42, y: rect.minY + 82, width: max(10, rect.width - 64), height: max(10, rect.height - 113))
-        let xMin = max(-1000, min(999.9, object.properties["xMin"] ?? -(object.properties["xRange"] ?? 6)))
-        let xMax = max(xMin + 0.1, min(1000, object.properties["xMax"] ?? (object.properties["xRange"] ?? 6)))
-        let yMin = max(-1000, min(999.9, object.properties["yMin"] ?? -(object.properties["yRange"] ?? 3)))
-        let yMax = max(yMin + 0.1, min(1000, object.properties["yMax"] ?? (object.properties["yRange"] ?? 3)))
-        let xSpan = xMax - xMin, ySpan = yMax - yMin
-        let zero = CGPoint(x: plot.minX - xMin / xSpan * plot.width, y: plot.maxY + yMin / ySpan * plot.height)
-        context.saveGState(); context.clip(to: plot)
-        let grid = (dark ? UIColor.white : UIColor.black).withAlphaComponent(0.055)
-        context.setStrokeColor(grid.cgColor); context.setLineWidth(0.7)
-        let xStep = max(1, Int(ceil(xSpan / 16)))
-        let yStep = max(1, Int(ceil(ySpan / 10)))
-        for i in stride(from: Int(ceil(xMin)), through: Int(floor(xMax)), by: xStep) {
-            let x = plot.minX + (Double(i) - xMin) / xSpan * plot.width
-            context.move(to: CGPoint(x: x, y: plot.minY)); context.addLine(to: CGPoint(x: x, y: plot.maxY))
+        let plotRect = CGRect(x: rect.minX + 58, y: rect.minY + 82, width: max(10, rect.width - 82), height: max(10, rect.height - 121))
+        let sampleCount = min(2048, max(256, Int(plotRect.width * 1.8)))
+        let key = (formula + "|" + object.properties.keys.sorted().map { "\($0)=\(object.properties[$0]!)" }.joined(separator: "|") + "|\(sampleCount)") as NSString
+        let graph: GraphPlot
+        if let entry = graphAnalysisCache.object(forKey: key) { graph = entry.plot }
+        else { graph = GraphPlot(formula: formula, properties: object.properties, sampleCount: sampleCount); graphAnalysisCache.setObject(GraphPlotCacheEntry(graph), forKey: key) }
+        text(graph.displayFormula, in: CGRect(x: rect.minX + 22, y: rect.minY + 45, width: rect.width - 44, height: 24), font: .monospacedSystemFont(ofSize: 13, weight: .regular), color: ink)
+        if let error = graph.error {
+            text(error, in: plotRect.insetBy(dx: 8, dy: 20), font: .systemFont(ofSize: 14), color: .systemOrange)
+            return
         }
-        for i in stride(from: Int(ceil(yMin)), through: Int(floor(yMax)), by: yStep) {
-            let y = plot.maxY - (Double(i) - yMin) / ySpan * plot.height
-            context.move(to: CGPoint(x: plot.minX, y: y)); context.addLine(to: CGPoint(x: plot.maxX, y: y))
+        let xticks = GraphPlot.ticks(min: graph.xMin, max: graph.xMax, target: max(2, Int(plotRect.width / 70)))
+        let yticks = GraphPlot.ticks(min: graph.yMin, max: graph.yMax, target: max(2, Int(plotRect.height / 45)))
+        func point(_ x: Double, _ y: Double) -> CGPoint {
+            CGPoint(x: plotRect.minX + (x - graph.xMin) / graph.xSpan * plotRect.width,
+                    y: plotRect.maxY - (y - graph.yMin) / graph.ySpan * plotRect.height)
         }
-        context.strokePath()
-        context.setStrokeColor(secondary.withAlphaComponent(0.5).cgColor); context.setLineWidth(1)
-        context.move(to: CGPoint(x: zero.x, y: plot.minY)); context.addLine(to: CGPoint(x: zero.x, y: plot.maxY))
-        context.move(to: CGPoint(x: plot.minX, y: zero.y)); context.addLine(to: CGPoint(x: plot.maxX, y: zero.y)); context.strokePath()
-        let amplitude = object.properties["amplitude"] ?? 1
-        let frequency = object.properties["frequency"] ?? 1
-        let c = object.properties["c"] ?? 0
-        let cacheKey = ([formula] + [plot.width, plot.height, xMin, xMax, yMin, yMax, amplitude, frequency, c].map { String($0) }).joined(separator: "|") as NSString
+        context.saveGState(); context.clip(to: plotRect)
+        if (object.properties["showGrid"] ?? 1) != 0 {
+            context.setStrokeColor((dark ? UIColor.white : UIColor.black).withAlphaComponent(0.07).cgColor)
+            context.setLineWidth(0.7)
+            for value in xticks { let x = point(value, graph.yMin).x; context.move(to: CGPoint(x: x, y: plotRect.minY)); context.addLine(to: CGPoint(x: x, y: plotRect.maxY)) }
+            for value in yticks { let y = point(graph.xMin, value).y; context.move(to: CGPoint(x: plotRect.minX, y: y)); context.addLine(to: CGPoint(x: plotRect.maxX, y: y)) }
+            context.strokePath()
+        }
+        if (object.properties["showAxes"] ?? 1) != 0 {
+            context.setStrokeColor(secondary.withAlphaComponent(0.55).cgColor); context.setLineWidth(1)
+            if graph.xMin <= 0 && graph.xMax >= 0 { let x = point(0, graph.yMin).x; context.move(to: CGPoint(x: x, y: plotRect.minY)); context.addLine(to: CGPoint(x: x, y: plotRect.maxY)) }
+            if graph.yMin <= 0 && graph.yMax >= 0 { let y = point(graph.xMin, 0).y; context.move(to: CGPoint(x: plotRect.minX, y: y)); context.addLine(to: CGPoint(x: plotRect.maxX, y: y)) }
+            context.strokePath()
+        }
+        let pathKey = "\(key)|\(plotRect.width)|\(plotRect.height)" as NSString
         let curve: UIBezierPath
-        if let cached = graphCache.object(forKey: cacheKey) { curve = cached }
+        if let cached = graphCache.object(forKey: pathKey) { curve = cached }
         else {
             curve = UIBezierPath()
-            let evaluator = PlotExpression(formula)
-            var previous: CGPoint?
-            let sampleCount = min(2048, max(32, Int(plot.width * 1.5)))
-            for pixel in 0...sampleCount {
-                let fraction = Double(pixel) / Double(sampleCount)
-                let x = xMin + fraction * xSpan
-                let y = amplitude * evaluator.evaluate(x: x * frequency) + c
-                guard y.isFinite, abs(y) < max(abs(yMin), abs(yMax)) * 10 + 10 else { previous = nil; continue }
-                let point = CGPoint(x: fraction * plot.width, y: plot.height - (y - yMin) / ySpan * plot.height)
-                if let last = previous, abs(last.y - point.y) < plot.height * 1.5 { curve.addLine(to: point) }
-                else { curve.move(to: point) }
-                previous = point
+            for segment in graph.segments where segment.count > 1 {
+                for (index, normalized) in segment.enumerated() {
+                    let point = CGPoint(x: normalized.x * plotRect.width, y: normalized.y * plotRect.height)
+                    if index == 0 { curve.move(to: point) } else { curve.addLine(to: point) }
+                }
             }
-            graphCache.setObject(curve, forKey: cacheKey)
+            graphCache.setObject(curve, forKey: pathKey)
         }
-        context.setStrokeColor(ink.cgColor); context.setLineWidth(2.5); context.setLineJoin(.round)
-        context.translateBy(x: plot.minX, y: plot.minY)
+        context.setStrokeColor(ink.cgColor); context.setLineWidth(CGFloat(object.properties["strokeWidth"] ?? 2.5)); context.setLineJoin(.round)
+        context.translateBy(x: plotRect.minX, y: plotRect.minY)
         context.addPath(curve.cgPath); context.strokePath(); context.restoreGState()
-        text("x", in: CGRect(x: plot.maxX - 10, y: min(plot.maxY - 18, max(plot.minY, zero.y + 6)), width: 15, height: 20), font: .italicSystemFont(ofSize: 12), color: secondary)
-        if plot.contains(zero) { text("0", in: CGRect(x: zero.x + 6, y: zero.y + 6, width: 20, height: 20), font: .systemFont(ofSize: 10), color: secondary) }
-        text(String(format: "%.1f", xMin), in: CGRect(x: plot.minX, y: plot.maxY + 8, width: 35, height: 20), font: .systemFont(ofSize: 10), color: secondary)
-        text(String(format: "%.1f", xMax), in: CGRect(x: plot.maxX - 25, y: plot.maxY + 8, width: 25, height: 20), font: .systemFont(ofSize: 10), color: secondary, alignment: .right)
+        let xStep = GraphPlot.tickStep(min: graph.xMin, max: graph.xMax, target: max(2, Int(plotRect.width / 70)))
+        let yStep = GraphPlot.tickStep(min: graph.yMin, max: graph.yMax, target: max(2, Int(plotRect.height / 45)))
+        for value in xticks {
+            text(GraphPlot.tickLabel(value, step: xStep), in: CGRect(x: point(value, 0).x - 28, y: plotRect.maxY + 7, width: 56, height: 18), font: .monospacedDigitSystemFont(ofSize: 10, weight: .regular), color: secondary, alignment: .center)
+        }
+        for value in yticks {
+            text(GraphPlot.tickLabel(value, step: yStep), in: CGRect(x: rect.minX + 3, y: point(0, value).y - 7, width: 47, height: 18), font: .monospacedDigitSystemFont(ofSize: 10, weight: .regular), color: secondary, alignment: .right)
+        }
+        text("x", in: CGRect(x: plotRect.maxX - 8, y: plotRect.maxY + 22, width: 15, height: 18), font: .italicSystemFont(ofSize: 11), color: secondary)
+        text("y", in: CGRect(x: plotRect.minX - 17, y: plotRect.minY - 17, width: 15, height: 18), font: .italicSystemFont(ofSize: 11), color: secondary)
     }
 
     private func image(for object: CanvasObject) -> UIImage? {
@@ -268,76 +271,284 @@ extension UIColor {
     }
 }
 
-/// A small, bounded expression parser. Plot expressions never run JavaScript or host code.
+/// A bounded original scalar-expression parser. Parsing happens once; sampling
+/// evaluates a typed tree and never executes JavaScript or host code.
 struct PlotExpression {
-    private let source: String
-    init(_ source: String) {
-        self.source = source.lowercased().replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "y=", with: "").replacingOccurrences(of: "**", with: "^").replacingOccurrences(of: "π", with: "pi").replacingOccurrences(of: "−", with: "-")
+    let source: String
+    let error: String?
+    let variables: Set<String>
+    private let root: Node?
+
+    init(_ input: String) {
+        var normalized = input.lowercased().filter { !$0.isWhitespace }
+            .replacingOccurrences(of: "**", with: "^")
+            .replacingOccurrences(of: "π", with: "pi")
+            .replacingOccurrences(of: "−", with: "-")
+            .replacingOccurrences(of: "×", with: "*")
+            .replacingOccurrences(of: "·", with: "*")
+            .replacingOccurrences(of: "÷", with: "/")
+        if let range = normalized.range(of: #"^(?:y|[a-z][a-z0-9_]*\(x\))="#, options: .regularExpression) { normalized.removeSubrange(range) }
+        source = normalized
+        if normalized.isEmpty || normalized.count > 2048 {
+            root = nil; variables = []; error = normalized.isEmpty ? "Enter a function of x." : "Keep graph expressions under 2,048 characters."; return
+        }
+        var parser = Parser(chars: Array(normalized))
+        let parsed = parser.sum()
+        if parser.index != parser.chars.count && parser.error == nil { parser.error = "Unexpected symbol ‘\(parser.chars[parser.index])’. Use an explicit function y = f(x)." }
+        root = parser.error == nil ? parsed : nil
+        variables = parser.variables
+        error = parser.error
     }
-    func evaluate(x: Double) -> Double {
-        var parser = Parser(chars: Array(source.prefix(512)), x: x)
-        let value = parser.sum()
-        return parser.index == parser.chars.count ? value : .nan
+
+    func diagnostic(parameters: [String: Double] = [:]) -> String? {
+        if let error { return error }
+        let missing = variables.subtracting(["x", "pi", "e"]).filter { parameters[$0] == nil }.sorted()
+        if !missing.isEmpty { return "Missing parameter\(missing.count == 1 ? "" : "s"): \(missing.joined(separator: ", ")). Add numeric values in Properties." }
+        return nil
     }
+
+    func evaluate(x: Double, parameters: [String: Double] = [:]) -> Double {
+        guard let root, x.isFinite else { return .nan }
+        return root.value(x: x, parameters: parameters)
+    }
+
+    private indirect enum Node {
+        case number(Double), variable(String), negative(Node), binary(Character, Node, Node), function(String, [Node])
+        func value(x: Double, parameters: [String: Double]) -> Double {
+            switch self {
+            case .number(let value): return value
+            case .variable(let name):
+                switch name { case "x": return x; case "pi": return .pi; case "e": return M_E; default: return parameters[name] ?? .nan }
+            case .negative(let node): return -node.value(x: x, parameters: parameters)
+            case .binary(let op, let left, let right):
+                let a = left.value(x: x, parameters: parameters), b = right.value(x: x, parameters: parameters)
+                switch op { case "+": return a + b; case "-": return a - b; case "*": return a * b; case "/": return a / b; case "^": return pow(a, b); default: return .nan }
+            case .function(let name, let nodes):
+                let a = nodes[0].value(x: x, parameters: parameters)
+                switch name {
+                case "sin": return sin(a); case "cos": return cos(a); case "tan": return tan(a)
+                case "asin": return asin(a); case "acos": return acos(a); case "atan": return atan(a)
+                case "sinh": return sinh(a); case "cosh": return cosh(a); case "tanh": return tanh(a)
+                case "sqrt": return sqrt(a); case "abs": return abs(a)
+                case "ln", "log": return log(a); case "log10": return log10(a); case "log2": return log2(a)
+                case "exp": return exp(a); case "floor": return floor(a); case "ceil": return ceil(a)
+                case "min": return min(a, nodes[1].value(x: x, parameters: parameters))
+                case "max": return max(a, nodes[1].value(x: x, parameters: parameters))
+                case "pow": return pow(a, nodes[1].value(x: x, parameters: parameters))
+                case "atan2": return atan2(a, nodes[1].value(x: x, parameters: parameters))
+                default: return .nan
+                }
+            }
+        }
+    }
+
     private struct Parser {
         let chars: [Character]
-        let x: Double
-        var index = 0
-        var depth = 0
+        var index = 0, depth = 0
+        var error: String?
+        var variables: Set<String> = []
+        mutating func fail(_ message: String) -> Node { if error == nil { error = message }; return .number(.nan) }
         mutating func consume(_ char: Character) -> Bool {
             if index < chars.count && chars[index] == char { index += 1; return true }; return false
         }
-        mutating func sum() -> Double {
-            var v = product()
-            while index < chars.count {
-                if consume("+") { v += product() } else if consume("-") { v -= product() } else { break }
-            }; return v
-        }
-        mutating func product() -> Double {
-            var v = unary()
-            while index < chars.count {
-                if consume("*") { v *= unary() } else if consume("/") { v /= unary() }
-                else if chars[index] == "(" || chars[index].isLetter { v *= unary() }
+        mutating func sum() -> Node {
+            var node = product()
+            while error == nil && index < chars.count {
+                if consume("+") { node = .binary("+", node, product()) }
+                else if consume("-") { node = .binary("-", node, product()) }
                 else { break }
-            }; return v
+            }
+            return node
         }
-        mutating func unary() -> Double {
-            if consume("+") { return unary() }; if consume("-") { return -unary() }
-            var value = atom()
-            if consume("^") { value = pow(value, unary()) }
-            return value
+        mutating func product() -> Node {
+            var node = unary()
+            while error == nil && index < chars.count {
+                if consume("*") { node = .binary("*", node, unary()) }
+                else if consume("/") { node = .binary("/", node, unary()) }
+                else if chars[index] == "(" || chars[index].isLetter || chars[index] == "_" { node = .binary("*", node, unary()) }
+                else { break }
+            }
+            return node
         }
-        mutating func atom() -> Double {
-            depth += 1
-            defer { depth -= 1 }
-            guard depth < 32, index < chars.count else { index = chars.count; return .nan }
-            if consume("(") { let value = sum(); guard consume(")") else { return .nan }; return value }
+        mutating func unary() -> Node {
+            depth += 1; defer { depth -= 1 }
+            guard depth <= 64 else { return fail("The expression is nested too deeply.") }
+            if consume("+") { return unary() }
+            if consume("-") { return .negative(unary()) }
+            var node = atom()
+            // Power binds before a leading minus and associates to the right:
+            // -x^2 = -(x^2), x^-2 = x^(-2), 2^3^2 = 2^(3^2).
+            if error == nil && consume("^") { node = .binary("^", node, unary()) }
+            return node
+        }
+        mutating func atom() -> Node {
+            guard index < chars.count else { return fail("The expression ends before a value.") }
+            if consume("(") {
+                let node = sum()
+                guard consume(")") else { return fail("Close the parenthesis with ).") }
+                return node
+            }
             if chars[index].isNumber || chars[index] == "." {
                 let start = index
                 while index < chars.count && (chars[index].isNumber || chars[index] == ".") { index += 1 }
-                return Double(String(chars[start..<index])) ?? .nan
+                if index < chars.count && chars[index] == "e" {
+                    var end = index + 1
+                    if end < chars.count && (chars[end] == "+" || chars[end] == "-") { end += 1 }
+                    let digits = end
+                    while end < chars.count && chars[end].isNumber { end += 1 }
+                    if end > digits { index = end }
+                }
+                guard let value = Double(String(chars[start..<index])), value.isFinite else { return fail("Invalid or out-of-range number.") }
+                return .number(value)
             }
+            guard chars[index].isLetter || chars[index] == "_" else { return fail("Expected a number, x, parameter, or function.") }
             let start = index
-            while index < chars.count && chars[index].isLetter { index += 1 }
+            while index < chars.count && (chars[index].isLetter || chars[index].isNumber || chars[index] == "_") { index += 1 }
             let name = String(chars[start..<index])
-            if name == "x" { return x }; if name == "pi" { return .pi }; if name == "e" { return M_E }
-            guard index > start, consume("(") else { index = chars.count; return .nan }
-            let value = sum(); guard consume(")") else { return .nan }
-            switch name {
-            case "sin": return sin(value)
-            case "cos": return cos(value)
-            case "tan": return tan(value)
-            case "sqrt": return sqrt(value)
-            case "abs": return abs(value)
-            case "ln", "log": return log(value)
-            case "exp": return exp(value)
-            case "asin": return asin(value)
-            case "acos": return acos(value)
-            case "atan": return atan(value)
-            default: return .nan
+            let functions: [String: Int] = ["sin": 1, "cos": 1, "tan": 1, "asin": 1, "acos": 1, "atan": 1, "sinh": 1, "cosh": 1, "tanh": 1, "sqrt": 1, "abs": 1, "ln": 1, "log": 1, "log10": 1, "log2": 1, "exp": 1, "floor": 1, "ceil": 1, "min": 2, "max": 2, "pow": 2, "atan2": 2]
+            if let count = functions[name] {
+                guard consume("(") else { return fail("Write \(name)(…) with parentheses.") }
+                var arguments = [sum()]
+                while error == nil && consume(",") { arguments.append(sum()) }
+                guard consume(")"), arguments.count == count else { return fail("\(name) needs \(count) argument\(count == 1 ? "" : "s") in parentheses.") }
+                return .function(name, arguments)
             }
+            // x(x+1) and a(x+1) mean multiplication; a misspelled
+            // multi-letter function is reported instead of silently guessed.
+            if index < chars.count && chars[index] == "(" && name.count > 1 && !["pi"].contains(name) {
+                return fail("Unknown function ‘\(name)’. Use a supported scalar function.")
+            }
+            variables.insert(name)
+            return .variable(name)
         }
     }
+}
+
+/// Shared sampled graph model for rendering, diagnostics, parameter behavior and
+/// tests. Explicit bounds are retained; absent Y bounds fit finite samples.
+struct GraphPlot {
+    let expression: PlotExpression
+    let parameters: [String: Double]
+    let xMin: Double, xMax: Double, yMin: Double, yMax: Double
+    let samples: [CGPoint]
+    let error: String?
+    var xSpan: Double { xMax - xMin }
+    var ySpan: Double { yMax - yMin }
+    var displayFormula: String {
+        var body = expression.source
+        let frequency = parameters["frequency"] ?? 1, amplitude = parameters["amplitude"] ?? 1
+        if !expression.variables.contains("frequency"), frequency != 1 {
+            body = body.replacingOccurrences(of: #"(?<![a-z_])x(?![a-z0-9_])"#, with: "(\(frequency.formatted())*x)", options: .regularExpression)
+        }
+        if !expression.variables.contains("amplitude"), amplitude != 1 { body = "\(amplitude.formatted())*(\(body))" }
+        let shift = (expression.variables.contains("c") ? 0 : (parameters["c"] ?? 0)) + (expression.variables.contains("offset") ? 0 : (parameters["offset"] ?? 0))
+        if shift != 0 { body += shift < 0 ? " − \(abs(shift).formatted())" : " + \(shift.formatted())" }
+        return "y = " + body
+    }
+
+    init(formula: String, properties: [String: Double], sampleCount: Int = 512) {
+        let expression = PlotExpression(formula)
+        self.expression = expression
+        var values = properties
+        for (name, fallback) in [("amplitude", 1.0), ("frequency", 1.0), ("c", 0.0), ("offset", 0.0)] where values[name] == nil { values[name] = fallback }
+        parameters = values
+        let proposedXMin = properties["xMin"] ?? -(abs(properties["xRange"] ?? 6))
+        let proposedXMax = properties["xMax"] ?? abs(properties["xRange"] ?? 6)
+        let validX = proposedXMin.isFinite && proposedXMax.isFinite && proposedXMax > proposedXMin && (proposedXMax - proposedXMin).isFinite
+        xMin = validX ? proposedXMin : -6; xMax = validX ? proposedXMax : 6
+        var diagnostic = expression.diagnostic(parameters: values)
+        if !validX { diagnostic = "X maximum must be greater than X minimum." }
+        let count = max(128, min(4096, sampleCount))
+        let xmin = xMin, span = xMax - xMin
+        let samples = (0...count).map { index -> CGPoint in
+            let x = xmin + Double(index) / Double(count) * span
+            return CGPoint(x: x, y: Self.value(x: x, expression: expression, parameters: values))
+        }
+        self.samples = samples
+        let finite = samples.map(\.y).filter(\.isFinite).sorted()
+        if finite.isEmpty && diagnostic == nil { diagnostic = "No real values in this X range. Check the function’s domain." }
+        var low = finite.first ?? -1, high = finite.last ?? 1
+        if finite.count > 40 {
+            let innerLow = finite[finite.count / 20], innerHigh = finite[finite.count - 1 - finite.count / 20]
+            // Avoid letting a sampled pole flatten the entire visible graph.
+            // Ordinary quadratics/exponentials keep their complete extrema.
+            if innerHigh > innerLow && (high - low) / (innerHigh - innerLow) > 12 { low = innerLow; high = innerHigh }
+        }
+        if high == low {
+            let margin = max(abs(high) * 0.1, 1)
+            low -= margin; high += margin
+        } else {
+            let margin = (high - low) * 0.08
+            low -= margin; high += margin
+        }
+        if !low.isFinite || !high.isFinite || !(high > low) { low = -1; high = 1 }
+        let proposedYMin = properties["yMin"] ?? properties["yRange"].map { -abs($0) } ?? low
+        let proposedYMax = properties["yMax"] ?? properties["yRange"].map { abs($0) } ?? high
+        let validY = proposedYMin.isFinite && proposedYMax.isFinite && proposedYMax > proposedYMin && (proposedYMax - proposedYMin).isFinite
+        yMin = validY ? proposedYMin : -1; yMax = validY ? proposedYMax : 1
+        if !validY { diagnostic = "Y maximum must be greater than Y minimum." }
+        error = diagnostic
+    }
+
+    func value(x: Double) -> Double { Self.value(x: x, expression: expression, parameters: parameters) }
+    private static func value(x: Double, expression: PlotExpression, parameters: [String: Double]) -> Double {
+        let names = expression.variables
+        let frequency = names.contains("frequency") ? 1 : (parameters["frequency"] ?? 1)
+        let amplitude = names.contains("amplitude") ? 1 : (parameters["amplitude"] ?? 1)
+        let legacyC = names.contains("c") ? 0 : (parameters["c"] ?? 0)
+        let offset = names.contains("offset") ? 0 : (parameters["offset"] ?? 0)
+        return amplitude * expression.evaluate(x: x * frequency, parameters: parameters) + legacyC + offset
+    }
+
+    /// Normalized points; discontinuities start separate paths.
+    var segments: [[CGPoint]] {
+        guard error == nil else { return [] }
+        var result: [[CGPoint]] = [], current: [CGPoint] = []
+        for sample in samples {
+            let point = CGPoint(x: (sample.x - xMin) / xSpan, y: 1 - (sample.y - yMin) / ySpan)
+            guard point.x.isFinite, point.y.isFinite, abs(point.y) < 20 else {
+                if !current.isEmpty { result.append(current); current = [] }; continue
+            }
+            if let previous = current.last, abs(previous.y - point.y) > 1.5 {
+                result.append(current); current = []
+            }
+            current.append(point)
+        }
+        if !current.isEmpty { result.append(current) }
+        return result
+    }
+
+    static func tickStep(min: Double, max: Double, target: Int = 6) -> Double {
+        let raw = (max - min) / Double(Swift.max(2, target))
+        guard raw.isFinite, raw > 0 else { return 1 }
+        let power = pow(10, floor(log10(raw))), normalized = raw / power
+        let factor = [1.0, 2, 2.5, 5, 10].first(where: { $0 >= normalized }) ?? 10
+        let step = factor * power
+        return step.isFinite && step > 0 ? step : raw
+    }
+    static func ticks(min: Double, max: Double, target: Int = 6) -> [Double] {
+        let step = tickStep(min: min, max: max, target: target)
+        let first = ceil(min / step) * step
+        guard first.isFinite else { return [] }
+        return (0..<64).map { first + Double($0) * step }.prefix(while: { $0 <= max + step * 0.000001 }).filter { $0 >= min - step * 0.000001 }
+    }
+    static func tickLabel(_ value: Double, step: Double) -> String {
+        if abs(value) < abs(step) * 0.000001 { return "0" }
+        if abs(value) >= 100_000 || abs(step) < 0.0001 {
+            let relative = abs(value / step)
+            let digits = relative.isFinite ? max(3, min(15, Int(ceil(log10(max(1, relative)))) + 1)) : 15
+            return String(format: "%.*g", digits, value)
+        }
+        let decimals = max(0, min(12, Int(ceil(-log10(abs(step)))) + 1))
+        var label = String(format: "%.*f", decimals, value)
+        if label.contains(".") { while label.last == "0" { label.removeLast() }; if label.last == "." { label.removeLast() } }
+        return label
+    }
+}
+
+private final class GraphPlotCacheEntry: NSObject {
+    let plot: GraphPlot
+    init(_ plot: GraphPlot) { self.plot = plot }
 }
 
 @MainActor

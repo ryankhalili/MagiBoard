@@ -31,6 +31,8 @@ class CompanionTests(unittest.TestCase):
 
     def test_status_distinguishes_native_voice_from_realtime_audio(self):
         bridge = CanvasBridge.__new__(CanvasBridge)
+        bridge.realtime = Mock()
+        bridge.realtime.status.return_value = {"realtimeAvailable": False, "realtimeModel": None}
         bridge.auth = Mock()
         bridge.auth.status.return_value = {"connected": True, "provider": "chatgpt"}
         bridge.display_name = "Demo Mac"

@@ -431,6 +431,23 @@ final class CanvasStudioUITests: XCTestCase {
         XCTAssertFalse(app.buttons["magic"].exists)
     }
 
+    func testVoiceProviderChoicePersistsWithoutStartingMicrophone() {
+        let app = launch()
+        app.buttons["settings"].tap(); settingsCategory("magic", in: app)
+        let provider = app.buttons["voiceProvider"]
+        reveal(provider, in: app)
+        XCTAssertTrue(provider.waitForExistence(timeout: 4))
+        provider.tap()
+        app.buttons["GPT Realtime · API key"].tap()
+        app.buttons["Done"].tap()
+        app.buttons["settings"].tap(); settingsCategory("magic", in: app)
+        reveal(provider, in: app)
+        XCTAssertTrue(provider.label.contains("GPT Realtime") || (provider.value as? String ?? "").contains("GPT Realtime"))
+        provider.tap(); app.buttons["Apple speech + canvas agent"].tap()
+        app.buttons["Done"].tap()
+        XCTAssertFalse(app.buttons["endVoice"].exists)
+    }
+
     func testToolbarCollapseAndPaperSetup() {
         let app = launch()
         let pen = app.buttons["tool_pen"]

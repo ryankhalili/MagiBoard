@@ -348,6 +348,49 @@ final class CanvasRendererTests: XCTestCase {
         }
         return bytes
     }
+    func testInkSelectionFollowsMaskedStrokeSilhouetteAndLeavesEmptyBoundsClear() throws {
+        let locations = [CGPoint(x: 20, y: 20), CGPoint(x: 60, y: 60), CGPoint(x: 100, y: 100)]
+        let points: [PKStrokePoint] = locations.enumerated().map { index, point in
+            let width = CGFloat(6 + index * 5)
+            return PKStrokePoint(location: point, timeOffset: Double(index) * 0.1,
+                                 size: CGSize(width: width, height: width),
+                                 opacity: 1, force: CGFloat(0.3) + CGFloat(index) * 0.3, azimuth: 0, altitude: .pi / 2)
+        }
+        let stroke = PKStroke(ink: PKInk(.pen, color: .black), path: PKStrokePath(controlPoints: points, creationDate: Date()),
+                              transform: CGAffineTransform(translationX: 10, y: 0),
+                              mask: UIBezierPath(rect: CGRect(x: 0, y: 0, width: 80, height: 160)))
+        let drawing = PKDrawing(strokes: [stroke]), source = drawing.dataRepresentation()
+        let highlight = InkSelectionHighlight(); highlight.setDrawing(drawing)
+        let area = CGRect(x: 0, y: 0, width: 160, height: 160)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false
+        let image = UIGraphicsImageRenderer(size: area.size, format: format).image { output in
+            highlight.draw(in: output.cgContext, visible: area, zoom: 1, displayScale: 1)
+        }
+        let ink = try pixel(image, at: CGPoint(x: 70, y: 60))
+        XCTAssertGreaterThan(ink[2], ink[0] + 50, "Selected handwriting has a blue silhouette")
+        XCTAssertGreaterThan(ink[3], 100)
+        let gap = try pixel(image, at: CGPoint(x: 30, y: 70))
+        XCTAssertEqual(gap[3], 0, "Do not fill or outline the handwriting's rectangular bounds")
+        let erased = try pixel(image, at: CGPoint(x: 108, y: 98))
+        XCTAssertEqual(erased[3], 0, "The selection must preserve PencilKit's erased mask")
+        XCTAssertEqual(drawing.dataRepresentation(), source, "Highlighting never recolors the saved ink")
+    }
+    func testInkSelectionCachesSmallCameraChangesAndClearsWithoutStaleGlow() {
+        let highlight = InkSelectionHighlight()
+        highlight.setDrawing(negativeDrawing().transformed(using: CGAffineTransform(translationX: 150, y: 150)))
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false
+        let area = CGRect(x: 0, y: 0, width: 300, height: 200)
+        let renderer = UIGraphicsImageRenderer(size: area.size, format: format)
+        _ = renderer.image { highlight.draw(in: $0.cgContext, visible: area, zoom: 1, displayScale: 1) }
+        XCTAssertEqual(highlight.renderCount, 1)
+        _ = renderer.image { highlight.draw(in: $0.cgContext, visible: area.offsetBy(dx: 8, dy: 3), zoom: 1.1, displayScale: 1) }
+        XCTAssertEqual(highlight.renderCount, 1, "Reuse the selected-ink texture during ordinary pan and zoom")
+        highlight.setDrawing(PKDrawing())
+        let cleared = renderer.image { highlight.draw(in: $0.cgContext, visible: area, zoom: 1, displayScale: 1) }
+        XCTAssertTrue(highlight.isEmpty)
+        XCTAssertEqual(highlight.renderCount, 1)
+        XCTAssertEqual(try pixel(cleared, at: CGPoint(x: 75, y: 60))[3], 0)
+    }
     func testNegativeOriginCropIncludesImageAndNativeInk() throws {
         let store = try store()
         let red = UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20)).image { context in

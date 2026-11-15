@@ -1,4 +1,4 @@
-# MagiBoard v0.3.1 validation scope
+# MagiBoard v0.4.0 validation scope
 
 MagiBoard is a development prototype. Native simulator and signed-device builds have been produced during development, and the app has been installed and launched on an iPad Pro. Automated coverage verifies important document, rendering, connection, and lifecycle behavior; it does not establish production readiness or physical Pencil and microphone performance.
 
@@ -16,6 +16,12 @@ python3 -m unittest discover -p 'test_*.py' -v
 The standalone checks in `Tests/ModelTests.swift`, `Tests/StoreTests.swift`, and `Tests/PDFLibraryChecks.swift` have their own entry points and are excluded from the XCTest targets.
 
 ## Coverage
+
+The final **v0.4.0** run passed **97 native unit tests** and the new voice-provider Settings UI test. The existing Settings persistence/AI-disable UI test passed in the preceding run. All **77 companion tests** passed. Native additions cover stroke-shaped selection pixels/masks, three concurrent voice tasks with immutable references, tool-result continuation snapshots, Realtime tool deduplication/barge-in state, PCM conversion and playback truncation, spatial PDF question crops/continuations/ambiguity, expression parameters, power precedence, axis fitting, and ticks. An initial PDF test caught a fractional-size bitmap edge that prevented blank-paper trimming; integer raster sizing fixed it and the complete unit suite passed afterward. An interrupted simulator launch was rerun successfully in isolation; the entire UI inventory was not rerun for this release.
+
+Live Realtime checks used the explicitly supplied API key through the configured Mac file. Credential minting succeeded with both fixed tools; an ephemeral credential connected using native `URLSessionWebSocketTask`. Text requests produced a direct triangle edit and a separate queued-image tool call (without executing an image generation). A short synthesized speech stream produced a valid circle edit and an input transcript. No user's microphone was captured for these probes. A subscription-backed advanced-plot request produced an original Canvas widget with numerical Runge–Kutta integration and vector arrows. API access and these payload checks do not establish mathematical correctness for arbitrary generated plots or physical iPad audio quality.
+
+Production PDF extraction was exercised against eight exercises in the actual uploaded textbook, including multi-page questions; the original question 2.2 crop was visually verified to retain its equation and final note while excluding adjacent questions. Only synthetic PDFs are committed. Ambiguous exercise endings return an error and offer an explicit whole-page alternative. The signed device build succeeded and was installed; physical microphone/echo/route-change checks remain below.
 
 | Area | Checks |
 | --- | --- |
