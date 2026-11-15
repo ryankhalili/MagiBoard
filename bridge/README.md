@@ -35,25 +35,29 @@ This bridge receives text requests, including text recognized by the iPad's nati
 
 All endpoints require `Authorization: Bearer <pairing token>` and reject browser `Origin` requests. JSON only, with a 16 MiB request limit. There is no CORS or unauthenticated status endpoint.
 
-- `GET /status` or `/auth/status`: `connected`, `provider`, `plan`, `name`, `displayName`, `busy`, `capabilities`, `voiceTransport`, `subscriptionRealtimeAudio`, and current login result.
+- `GET /status` or `/auth/status`: `connected`, `provider`, `plan`, `name`, `displayName`, `busy`, `activeRequests`, `maxConcurrentRequests`, `capabilities`, `voiceTransport`, `subscriptionRealtimeAudio`, and current login result.
 - `POST /auth/start` with `{}`: `verificationUrl`, `userCode`, `loginId`, `type`, from official Codex `account/login/start` with `chatgptDeviceCode`.
 - `POST /auth/cancel` with `loginId`: cancel pending sign-in.
 - `POST /disconnect` with `{}`: revoke this pairing token and write a new local pairing file.
-- `POST /generate`: `{prompt, objects, reference?, selectedIDs?, imageBase64?, documentText?}`. Returns `{message, operations:[{type,id,object?}]}`. Types are `add`, `update`, `delete`. Use an HTTP timeout of at least 240 seconds.
+- `POST /generate`: `{prompt, objects, reference?, selectedIDs?, imageBase64?, documentText?}`. Returns `{message, operations:[{type,id,object?}]}`. Types are `add`, `update`, `delete`. Use an HTTP timeout of at least 420 seconds.
+- `GET /catalog/status`: whether the separately configured Databricks object catalog is connected.
+- `GET /catalog/objects`: `{objects:[{id,title,kind,createdAt,schemaVersion}],truncated}` for immutable saved versions.
+- `POST /catalog/objects` with `{object}`: explicitly save one validated canvas object; returns `{entry}`.
+- `GET /catalog/objects/{snapshot UUID}`: `{entry,object}`. Native import assigns a new object identity and places it in the current notebook.
 
 A reference contains `x,y,width,height` in canvas coordinates. A small rectangle acts as a waypoint. PNG/JPEG image context is optional; PDF content should be extracted to `documentText` by the native app. Existing image bytes are excluded from the textual object prompt.
 
-Canvas objects include `id` (UUID), `kind` (`text`, `shape`, `graph`, `image`, `widget`, `latex`, `frame`), `title`, `x,y,width,height`, `color`, `text`, `properties` (numeric dictionary), `code` (self-contained widget HTML), `shape`, `pattern`. Strict model output uses a JSON-encoded property dictionary internally; the bridge normalizes and validates it before responding.
+Canvas objects include `id` (UUID), `kind` (`text`, `shape`, `graph`, `image`, `widget`, `latex`, `frame`), `title`, `x,y,width,height`, `color`, `text`, `properties` (numeric dictionary), `propertySpecs`, `code` (self-contained widget HTML), `shape`, `pattern`. Each property spec declares `key,label,control,min,max,step,unit,choices`; controls are slider, number, toggle, or numeric choice. The parameter must exist and fit its declared bounds. Strict model output uses a JSON-encoded property dictionary internally; the bridge normalizes and validates it before responding.
 
-Generation runs an ephemeral, read-only Codex turn in a temporary directory. Host command tools, connected apps, plugins, browser control, hooks, memory, and delegation are disabled. Hosted web search is available. The app should render widget HTML in a constrained web view with no native message bridge or external network access. Generation cannot act as a general-purpose Mac command executor.
+Up to four independent generation requests can run concurrently. Each freezes its reference and nested object context, uses a separate temporary directory, and launches its own ephemeral, read-only Codex turn. A fifth request gets a capacity message. There is no shared conversation thread between requests. Host command tools, connected apps, plugins, browser control, hooks, memory, and delegation are disabled. Hosted web search is available. Native widgets run in a constrained web view with no external network or arbitrary host access; their only native interface is the app's validated, explicitly enabled Interact API for creating, duplicating, and updating canvas objects. Generation cannot act as a general-purpose Mac command executor.
 
-This version supports model-authored canvas objects, interactive HTML widgets, image understanding, handwriting transcription when given a screenshot, web research, and subscription raster image generation. Subscription image generation is connected: the CLI creates the raster asset, then the companion attaches its base64 bytes as `imageData`. It reads only images inside the exact Codex turn's generated-image directory, rejects path escapes and symlinks, and limits each image to 8 MiB. Voice capture and PDF extraction belong to the native app. An [experimental Databricks adapter](DATABRICKS.md) is included with offline tests, but is disabled and disconnected from the app. Arbitrary backend execution and API-key mode are not configured.
+This version supports model-authored canvas objects, interactive HTML widgets, image understanding, handwriting transcription when given a screenshot, web research, and subscription raster image generation. Subscription image generation is connected: the CLI creates the raster asset, then the companion attaches its base64 bytes as `imageData`. It reads only images inside the exact Codex turn's generated-image directory, rejects path escapes and symlinks, and limits each image to 8 MiB. Voice capture and PDF extraction belong to the native app. The [Databricks cloud object catalog](DATABRICKS.md) supports explicit save/list/load with separate local configuration; its optional SQL data-chart adapter remains disabled and unwired. Arbitrary backend execution and API-key mode are not configured.
 
 ## Validation
 
 ```sh
 cd bridge
-python3 -m unittest test_server test_companion -v
+python3 -m unittest discover -v
 ```
 
 The tests cover authorization, browser-origin rejection, token revocation, device-login response shape, object IDs, finite geometry, property validation, uppercase Swift UUIDs, confinement of generated-image paths, secret-free Bonjour metadata, voice capability reporting, executable discovery, and stale-process safeguards. A live subscription smoke test on 2026-11-15 confirmed account status and created a green triangle with 49°, 52°, and 79° angles through the real Codex CLI. It used no API key. Further live tests generated a tappable coin-duplication HTML widget and a raster coin image with attached image bytes. The background launcher was tested in an isolated state directory for start, duplicate-start prevention, authenticated status, private file permissions, and graceful stop.

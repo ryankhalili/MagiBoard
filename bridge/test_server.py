@@ -118,10 +118,22 @@ class FakeBridge:
         return {"message": "Disconnected"}
 
 
+class FakeCatalog:
+    def status(self):
+        return {"configured": True, "connected": True, "provider": "Databricks"}
+    def list_objects(self):
+        return {"objects": [{"id": "snapshot", "title": "Test object"}], "truncated": False}
+    def save_object(self, obj):
+        return {"entry": {"id": "snapshot", "title": obj["title"]}}
+    def load_object(self, ident):
+        return {"entry": {"id": ident}, "object": {"title": "Test object"}}
+
+
 class HTTPTests(unittest.TestCase):
     def setUp(self):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.bridge = FakeBridge()
+        self.server.bridge.catalog = FakeCatalog()
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.url = "http://127.0.0.1:" + str(self.server.server_port)
@@ -157,6 +169,18 @@ class HTTPTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self.request("/unknown")
         self.assertEqual(ctx.exception.code, 404)
+
+    def test_cloud_catalog_http_contract(self):
+        self.assertTrue(self.request("/catalog/status")["connected"])
+        self.assertEqual(self.request("/catalog/objects")["objects"][0]["title"], "Test object")
+        self.assertEqual(self.request("/catalog/objects", {"object": {"title": "Saved"}})["entry"]["title"], "Saved")
+        self.assertEqual(self.request("/catalog/objects/snapshot")["entry"]["id"], "snapshot")
+
+    def test_cloud_catalog_requires_bearer_for_reads_and_writes(self):
+        for path, data in (("/catalog/status", None), ("/catalog/objects", None), ("/catalog/objects/snapshot", None), ("/catalog/objects", {"object": {}})):
+            with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.request(path, data, token="wrong")
+            self.assertEqual(ctx.exception.code, 401)
 
 
 if __name__ == "__main__":
