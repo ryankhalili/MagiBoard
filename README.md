@@ -1,0 +1,77 @@
+# MagiBoard · v0.2
+
+A native iPad whiteboard for handwriting, interactive objects, and an AI assistant that works where you point. Built for MadHacks with original Swift and Python code; no whiteboard application's source was copied or forked.
+
+## What you can do
+
+- Write with Apple Pencil using PencilKit pens, pencil, highlighter, eraser, and ink lasso. Pan, zoom, select objects, resize, duplicate, and undo.
+- Organize notebooks in the sliding library sidebar. Add named page regions, choose blank/dotted/ruled/grid paper, and collapse the drawing toolbar.
+- Create editable geometry, graphs, text, equations, images, and interactive HTML objects. Change exposed numeric properties or save an object to your catalog.
+- Focus Magic Pen on a point or rectangle and type a request. In voice mode, speak a request, hear the reply, and continue with the next request hands-free.
+- Search imported PDF references, place pages on the canvas, and write over them. Import images and export a region as PNG/PDF or a complete editable notebook.
+
+Settings are organized into Account, Voice & Magic, Canvas, Storage, and About. Drawing works without an AI connection; a small, explicitly labeled offline command set demonstrates common geometry edits and example objects.
+
+## Build the iPad app
+
+Requirements: macOS with Xcode, an iPadOS 18-or-later SDK and device, or an iPad simulator. Development used Xcode 27.2. Physical-device installation needs your own Apple development signing settings.
+
+1. Open `CanvasStudio.xcodeproj` and select the **CanvasStudio** scheme.
+2. Select an iPad simulator, or choose your development team and connected iPad under Signing & Capabilities.
+3. Run the app. For a physical iPad, enable Developer Mode and trust the development account if iPadOS asks.
+
+Command-line build, from this directory:
+
+```sh
+python3 build.py simulator
+python3 build.py device
+```
+
+The app is named **MagiBoard**. The project, bundle identity, `.canvasstudio` notebook extension, and existing storage locations retain their earlier names for compatibility with saved notebooks and pairing.
+
+## Connect your ChatGPT subscription
+
+1. Install Codex on the Mac and sign in with ChatGPT.
+2. Double-click **Start MagiBoard.command** in `bridge/`, or run:
+
+   ```sh
+   python3 bridge/companion.py start
+   ```
+
+3. Use **Pair iPad.command** in `bridge/` to reveal the private pairing file. Transfer it to the iPad, then choose **Settings → Account → Connect Mac companion** to import it.
+4. Allow Local Network access and check the connection. If needed, **Sign in with ChatGPT** opens the official device-code sign-in flow.
+
+Keep both devices on the same trusted network and keep the Mac awake. The companion runs independently in the background: it does not use the development chat and does not need that chat or its Terminal window to stay open. It does not automatically restart after a Mac reboot. Use **Stop MagiBoard.command** to stop it. Nearby Mac discovery is available in Advanced connection; discovery never replaces secure pairing.
+
+ChatGPT credentials remain managed by Codex on the Mac. The iPad stores a separate pairing token in Keychain. AI requests share the prompt, structured canvas context, a focused screenshot, and relevant PDF excerpts with the companion. Hosted web search and image generation depend on the connected account and runtime. See the [companion guide](bridge/README.md) for details.
+
+## Voice
+
+Choose **Settings → Voice & Magic → Open voice conversation**, then hold Magic Pen. The app listens for a request, sends the recognized text to Codex, applies valid canvas changes, speaks a reply, and listens again. You can stop the conversation or use text input instead. Speech language and spoken replies are configurable.
+
+This version uses **Apple speech recognition → Codex text requests → Apple speech synthesis**. It is not OpenAI speech-to-speech streaming. A real probe of the installed Codex runtime rejected subscription-only realtime audio with an API-key requirement; a separate API-backed realtime integration is not included. Recognition requests on-device processing when supported and can fall back to Apple's speech service. See [voice integration findings](bridge/VOICE_NOTES.md).
+
+## Test
+
+In Xcode, choose an available iPad simulator and run **Product → Test**. The XCTest targets cover document transactions, persistence, rendering, camera/ink coordinates, voice lifecycle, and native UI interactions.
+
+```sh
+cd bridge
+python3 -m unittest test_server test_companion -v
+```
+
+Standalone model, store, and PDF checks are also available in `Tests/`. See [validation scope](docs/VALIDATION.md) for the evidence and remaining physical-device checks.
+
+## Prototype limits
+
+- The expanding canvas has practical limits: 2,000 objects and 40 MB of ink per notebook. Imported PDFs are limited to 40 MB and 300 pages. PDF search uses embedded text, not OCR.
+- Interactive objects run isolated, network-blocked HTML/JavaScript. They do not provide arbitrary native code, Python, shell access, or a persistent backend. Transient widget state may reset on reload; exports are static.
+- Equation display implements a small LaTeX subset. Handwriting conversion requires an explicit visual AI request. GIF imports are static; HTML objects can animate.
+- AI needs the paired Mac and internet. Native voice is turn-based and has recognition/network latency; microphone behavior and Pencil feel need testing on the actual iPad.
+- API-key settings, Databricks, cloud sync, collaboration, standalone iPad Codex execution, and an extension marketplace are not implemented. The companion's authenticated local HTTP transport is intended for a trusted network.
+
+## Source and rights
+
+The app uses Apple system frameworks without third-party whiteboard libraries. The companion uses Python's standard library and an externally installed Codex runtime. [Provenance](docs/PROVENANCE.md) records the conceptual inspiration and AI coding assistance; [architecture](docs/ARCHITECTURE.md) describes the implementation boundaries.
+
+[LICENSE](LICENSE) reserves rights in the original project source. No open-source license is granted. Apple frameworks, Codex, imported documents, and generated or retrieved material retain their applicable rights and terms.
