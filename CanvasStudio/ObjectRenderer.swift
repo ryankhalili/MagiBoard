@@ -68,12 +68,17 @@ final class ObjectRenderer {
 
     private func drawShape(_ object: CanvasObject, context: CGContext, ink: UIColor, foreground: UIColor) {
         let rect = object.rect
-        let titleHeight: CGFloat = object.title.isEmpty ? 0 : 32
-        let area = CGRect(x: rect.minX + 22, y: rect.minY + titleHeight + 10, width: max(1, rect.width - 44), height: max(1, rect.height - titleHeight - 34))
+        let recognized = (object.properties["recognizedOutline"] ?? 0) > 0
+        let titleHeight: CGFloat = object.title.isEmpty || recognized ? 0 : 32
+        let area = recognized ? rect : CGRect(x: rect.minX + 22, y: rect.minY + titleHeight + 10, width: max(1, rect.width - 44), height: max(1, rect.height - titleHeight - 34))
         let path = UIBezierPath()
         var vertices: [CGPoint] = []
         let shape = object.shape.lowercased()
-        if shape == "triangle" {
+        if shape == "polygon", let outline = RecognizedPolygonGeometry.vertices(for: object) {
+            path.move(to: outline[0])
+            for point in outline.dropFirst() { path.addLine(to: point) }
+            path.close()
+        } else if shape == "triangle" {
             let a = max(0.000001, object.properties["angleA"] ?? 49)
             let b = max(0.000001, object.properties["angleB"] ?? 52)
             vertices = TriangleGeometry.vertices(in: area, angleA: a, angleB: b)
@@ -127,7 +132,7 @@ final class ObjectRenderer {
             }
             context.restoreGState()
         }
-        if !object.title.isEmpty {
+        if !object.title.isEmpty && !recognized {
             text(object.title, in: CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: 28), font: .systemFont(ofSize: 15, weight: .medium), color: foreground, alignment: .center)
         }
         if vertices.count == 3 {
@@ -218,6 +223,21 @@ final class ObjectRenderer {
     }
 }
 
+
+/// Recognized outlines store normalized vertices so moving/resizing remains native and
+/// their original orientation survives serialization. They are not canonical angle diagrams.
+enum RecognizedPolygonGeometry {
+    static func vertices(for object: CanvasObject) -> [CGPoint]? {
+        guard let count = object.properties["vertexCount"], count == 3 || count == 4 else { return nil }
+        var result: [CGPoint] = []
+        for index in 0..<Int(count) {
+            guard let x = object.properties["vertex\(index)X"], let y = object.properties["vertex\(index)Y"],
+                  x.isFinite, y.isFinite, (-0.000001...1.000001).contains(x), (-0.000001...1.000001).contains(y) else { return nil }
+            result.append(CGPoint(x: object.x + x * object.width, y: object.y + y * object.height))
+        }
+        return result
+    }
+}
 
 /// Computes a true Euclidean triangle, fitting it without nonuniform scaling.
 enum TriangleGeometry {

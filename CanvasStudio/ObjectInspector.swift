@@ -193,7 +193,11 @@ struct ObjectInspector: View {
     }
     private func extraKeys(_ object: CanvasObject) -> [String] {
         let standard: Set<String> = ["amplitude", "frequency", "c", "angleA", "angleB", "angleC", "fontSize", "opacity", "fillOpacity", "bold", "card", "strokeWidth", "cornerRadius"]
-        return object.properties.keys.filter { !isDeclared($0, object) && (object.kind == "widget" || !standard.contains($0)) }.sorted()
+        let recognizedOutline = (object.properties["recognizedOutline"] ?? 0) > 0
+        return object.properties.keys.filter {
+            let outlineMetadata = recognizedOutline && ($0 == "recognizedOutline" || $0 == "vertexCount" || $0.range(of: "^vertex[0-3][XY]$", options: .regularExpression) != nil)
+            return !outlineMetadata && !isDeclared($0, object) && (object.kind == "widget" || !standard.contains($0))
+        }.sorted()
     }
     private func hasExtraProperties(_ object: CanvasObject) -> Bool { !extraKeys(object).isEmpty }
     private func isDeclared(_ key: String, _ object: CanvasObject) -> Bool { object.propertySpecs.contains { $0.key == key } }

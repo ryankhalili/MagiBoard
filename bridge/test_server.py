@@ -64,6 +64,22 @@ class ValidationTests(unittest.TestCase):
     def test_schema_has_no_extra_top_fields(self):
         self.assertFalse(output_schema()["additionalProperties"])
 
+    def test_pdf_insert_uses_known_document_and_one_based_page(self):
+        documents = [{"id": self.id, "title": "Original exercises", "pages": 400}]
+        raw = {"operations": [{"type": "insertPDF", "documentID": self.id.upper(), "page": 350, "x": -100, "y": None}]}
+        result = validate_response(raw, documents=documents)
+        self.assertEqual(result["operations"], [{"type": "insertPDF", "documentID": self.id, "page": 350, "x": -100.0}])
+
+    def test_pdf_insert_rejects_unknown_pages_and_excessive_batch(self):
+        documents = [{"id": self.id, "title": "Original exercises", "pages": 400}]
+        valid = {"type": "insertPDF", "documentID": self.id, "page": 350}
+        for invalid in ({**valid, "documentID": "file:///private/book.pdf"}, {**valid, "documentID": str(uuid.uuid4())},
+                        {**valid, "page": 0}, {**valid, "page": 401}, {**valid, "page": True}, {**valid, "x": float("inf")}):
+            with self.subTest(invalid=invalid), self.assertRaises(BridgeError):
+                validate_response({"operations": [self.raw["operations"][0], invalid]}, documents=documents)
+        with self.assertRaises(BridgeError):
+            validate_response({"operations": [valid] * 5}, documents=documents)
+
 
 class ImageAttachmentTests(unittest.TestCase):
     def setUp(self):

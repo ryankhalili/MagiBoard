@@ -1,4 +1,4 @@
-# MagiBoard v0.3 validation scope
+# MagiBoard v0.3.1 validation scope
 
 MagiBoard is a development prototype. Native simulator and signed-device builds have been produced during development, and the app has been installed and launched on an iPad Pro. Automated coverage verifies important document, rendering, connection, and lifecycle behavior; it does not establish production readiness or physical Pencil and microphone performance.
 
@@ -38,11 +38,17 @@ For v0.3, all **45 native unit tests** passed: 5 independent-task/image checks, 
 
 The standalone suites previously passed 12 model checks, 10 store checks, and 8 PDF checks. Physical microphone and Apple Pencil experience still require the hands-on checks below.
 
+For **v0.3.1**, all **70 native unit tests** passed: 7 independent-task/image checks, 21 renderer/shape/camera checks, 7 equation checks, 13 store/schema/starter checks, 10 mixed-selection checks, 6 voice lifecycle checks, 4 cloud catalog/package checks, and 2 PDF library checks. All **65 Python companion tests** passed. Targeted UI runs verified mixed ink/object copy/paste/duplicate/undo, catalog search/filter/grid/list/preview/insertion, matching bottom-control geometry, handwriting, hand/finger panning, and Magic Pen reference retention through two-finger zoom and tool changes. The final run included all 70 unit tests and the three navigation/drawing UI regressions; it passed without failures. The entire 17-method UI inventory was not rerun as one suite against the final source revision.
+
+New native checks cover shape recognition boundaries and orientation, keeping later strokes when recognition completes, deferring native drawing mutations through zoom settlement, autonomous voice jobs with callback isolation, and mixed-selection rollback and clipboard validation. PDF tests import and search a synthetic 400-page document, render page 350, and route an actual captured-library `insertPDF` response through `ConnectionClient` into one undoable image insertion. The signed v0.3.1 device build succeeded and was installed and launched on the connected iPad.
+
 ## Live integration evidence
 
 Live checks on November 15, 2026 used the Mac's existing ChatGPT sign-in without an API key. They retrieved account status, generated the requested triangle with 49°, 52°, and 79° angles, created a tappable coin widget, and returned a generated raster image with image bytes attached.
 
 The v0.3 live checks also ran two independent requests concurrently with different reference regions, generated editable bare equations and exposed graph controls, and transcribed a fraction through the running companion's authenticated HTTP endpoint. Databricks managed-volume save/list/load preserved a synthetic object's identity and geometry. Only an original synthetic demo object was uploaded during these checks; user notebooks were not uploaded, and the SQL warehouse remained stopped.
+
+The v0.3.1 companion accepted a live medium-effort request and a separate page-350 printout request against synthetic captured PDF metadata. The latter returned a validated `insertPDF` operation in approximately 6.2 seconds; native tests separately verify rendering and insertion from the actual 400-page file. This timing is one observed run, not a latency guarantee. Databricks status/list/load remained available after the final companion restart, with the SQL warehouse still stopped.
 
 The independent background launcher was exercised with isolated temporary state: start, duplicate-start prevention, authenticated status, private runtime-file permissions, and graceful stop. Bonjour registration and resolution were also verified on macOS.
 

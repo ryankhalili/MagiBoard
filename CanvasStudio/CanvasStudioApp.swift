@@ -24,8 +24,10 @@ struct CanvasStudioApp: App {
                     if url.pathExtension == "canvaspair" { ConnectionClient.importPairing(url, into: store) }
                     else if url.pathExtension.lowercased() == "magiboardobject" { store.importObjectPackage(url) }
                     else if url.pathExtension.lowercased() == "pdf" {
-                        do { try library.importDocument(url: url); store.status = "Added PDF to your reference library" }
-                        catch { store.status = error.localizedDescription }
+                        Task {
+                            do { try await library.importDocument(url: url); store.status = "Added PDF to your reference library" }
+                            catch { store.status = error.localizedDescription }
+                        }
                     } else { store.load(url: url) }
                 }
                 .task {

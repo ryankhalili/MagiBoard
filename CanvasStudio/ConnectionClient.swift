@@ -121,6 +121,7 @@ final class ConnectionClient: ObservableObject {
     func focus(_ job: CanvasAgentJob, store: NotebookStore) {
         guard job.notebookID == store.notebook.id else { return }
         if let id = job.resultIDs.first, store.notebook.objects.contains(where: { $0.id == id }) {
+            store.clearSelection()
             store.tool = .select; store.selectedIDs = job.resultIDs
             NotificationCenter.default.post(name: .canvasFocusObject, object: id)
         }
@@ -145,7 +146,7 @@ final class ConnectionClient: ObservableObject {
         let crop = reference.width < 2 || reference.height < 2
             ? CGRect(x: reference.x - 350, y: reference.y - 250, width: 700, height: 500) : reference.cgRect
         let visual = settings.bridgeURL.isEmpty ? nil : CanvasExporter.snapshot(store: store, rect: crop)?.jpegData(compressionQuality: 0.65)?.base64EncodedString()
-        let documentText = settings.bridgeURL.isEmpty ? "" : library.textContext(query: clean)
+        let referenceDocuments = library.documents
         tasks[requestID] = Task {
             var message = "", failed = false, resultIDs = Set<UUID>()
             defer {
@@ -166,23 +167,31 @@ final class ConnectionClient: ObservableObject {
                 if settings.bridgeURL.isEmpty {
                     response = LocalAssistant.respond(prompt: clean, objects: original.objects, reference: reference, selectedIDs: ids)
                 } else {
+                    let documentText = await library.textContext(query: clean, documents: referenceDocuments)
+                    try Task.checkCancellation()
                     struct Payload: Encodable {
+                        struct Document: Encodable { var id: UUID; var title: String; var pages: Int }
                         var prompt: String
+                        var reasoningEffort: String
                         var objects: [CanvasObject]
                         var selectedIDs: [UUID]
                         var reference: CanvasRect
                         var imageBase64: String?
                         var documentText: String
+                        var documents: [Document]
                     }
                     var contextObjects = original.objects
                     for index in contextObjects.indices { contextObjects[index].imageData = nil }
-                    let payload = Payload(prompt: clean, objects: contextObjects, selectedIDs: Array(ids), reference: reference,
-                                          imageBase64: visual, documentText: documentText)
+                    let payload = Payload(prompt: clean, reasoningEffort: settings.reasoningEffort, objects: contextObjects, selectedIDs: Array(ids), reference: reference,
+                                          imageBase64: visual, documentText: documentText,
+                                          documents: referenceDocuments.map { Payload.Document(id: $0.id, title: $0.title, pages: $0.pages) })
                     response = try await request("generate", settings: settings, body: JSONEncoder().encode(payload))
                 }
                 try Task.checkCancellation()
                 guard tasks[requestID] != nil else { return }
-                var result = response
+                var result = try await library.resolvingPDFInsertions(response, documents: referenceDocuments, reference: reference)
+                try Task.checkCancellation()
+                guard tasks[requestID] != nil else { return }
                 for i in result.operations.indices where result.operations[i].type == "update" {
                     if var item = result.operations[i].object, item.imageData == nil,
                        let old = original.objects.first(where: { $0.id == (result.operations[i].id ?? item.id) }) {

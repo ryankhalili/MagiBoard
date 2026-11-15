@@ -116,18 +116,23 @@ final class AgentTaskTests: XCTestCase {
         client.onCompletion = { _, failed in XCTAssertFalse(failed); callbackCount += 1 }
         defer { client.onCompletion = nil; client.cancel() }
         let firstRegion = try XCTUnwrap(store.reference)
+        store.settings.reasoningEffort = "high"
         let firstID = try XCTUnwrap(client.send("first region", store: store, library: library) { _, failed in
             XCTAssertFalse(failed); XCTAssertFalse(client.busy); first.fulfill()
         })
         let secondRegion = CanvasRect(x: 300, y: 400, width: 220, height: 160)
         store.reference = secondRegion
+        store.settings.reasoningEffort = "low"
         let secondID = try XCTUnwrap(client.send("second region", store: store, library: library) { _, failed in
             XCTAssertFalse(failed); XCTAssertTrue(client.busy, "The first task must remain active"); second.fulfill()
         })
+        store.settings.reasoningEffort = "medium"
         XCTAssertEqual(Set(store.pendingTasks.map(\.id)), [firstID, secondID])
         await fulfillment(of: [received], timeout: 3)
         XCTAssertEqual((transport.payload("first region")?["reference"] as? [String: Double])?["x"], firstRegion.x)
         XCTAssertEqual((transport.payload("second region")?["reference"] as? [String: Double])?["x"], secondRegion.x)
+        XCTAssertEqual(transport.payload("first region")?["reasoningEffort"] as? String, "high")
+        XCTAssertEqual(transport.payload("second region")?["reasoningEffort"] as? String, "low")
         let freshReference = CanvasRect(x: 900, y: -500, width: 80, height: 90)
         store.reference = freshReference; store.tool = .pen
         let ink = drawingData(); store.setDrawing(ink)
@@ -239,6 +244,52 @@ final class AgentTaskTests: XCTestCase {
         XCTAssertEqual(store.notebook.drawingData, firstInk, "Undoing the AI change must preserve ink drawn before it arrived")
         store.undo()
         XCTAssertTrue(store.notebook.drawingData.isEmpty)
+    }
+
+    func testDetachedVoiceTasksKeepWorkingAndCannotReplyIntoTheNewVoiceSession() async throws {
+        let (store, library, transport, client) = try environment()
+        let received = started(transport)
+        let oldApplied = expectation(description: "Detached voice task still changes the canvas")
+        let newReply = expectation(description: "New reference receives its own spoken reply")
+        let routing = VoiceTaskSession()
+        var staleReplies = 0
+        client.onCompletion = { message, failed in
+            XCTAssertFalse(failed)
+            if message == "First canvas job" { oldApplied.fulfill() }
+        }
+        defer { client.onCompletion = nil; client.cancel() }
+        routing.begin()
+        let oldID = try XCTUnwrap(routing.send("first voice area", agent: client, store: store, library: library) { _, _ in staleReplies += 1 })
+        routing.detach()
+        XCTAssertEqual(client.jobs.first { $0.id == oldID }?.state, .running)
+        store.tool = .pen
+        store.reference = CanvasRect(x: 800, y: -300, width: 100, height: 120)
+        routing.begin()
+        let newID = try XCTUnwrap(routing.send("second voice area", agent: client, store: store, library: library) { message, failed in
+            XCTAssertFalse(failed); XCTAssertEqual(message, "Second canvas job"); newReply.fulfill()
+        })
+        await fulfillment(of: [received], timeout: 3)
+        let first = CanvasObject(title: "First voice result"), second = CanvasObject(title: "Second voice result")
+        try transport.finish("first voice area", with: AgentResponse(message: "First canvas job", operations: [AgentOperation(type: "add", object: first)]))
+        await fulfillment(of: [oldApplied], timeout: 3)
+        XCTAssertEqual(staleReplies, 0)
+        XCTAssertEqual(routing.requestID, newID, "An old result must not clear the new voice request")
+        XCTAssertEqual(store.notebook.objects, [first])
+        XCTAssertEqual(store.tool, .pen)
+        try transport.finish("second voice area", with: AgentResponse(message: "Second canvas job", operations: [AgentOperation(type: "add", object: second)]))
+        await fulfillment(of: [newReply], timeout: 3)
+        XCTAssertEqual(Set(store.notebook.objects.map(\.id)), [first.id, second.id])
+        XCTAssertNil(routing.requestID)
+        XCTAssertEqual(staleReplies, 0)
+    }
+
+    func testThinkingLevelMigratesOldSettingsAndPersistsSupportedChoices() throws {
+        XCTAssertEqual(try JSONDecoder().decode(StudioSettings.self, from: Data("{}".utf8)).reasoningEffort, "low")
+        XCTAssertEqual(try JSONDecoder().decode(StudioSettings.self, from: Data(#"{"reasoningEffort":"unknown"}"#.utf8)).reasoningEffort, "low")
+        for effort in ["low", "medium", "high", "xhigh"] {
+            var settings = StudioSettings(); settings.reasoningEffort = effort
+            XCTAssertEqual(try JSONDecoder().decode(StudioSettings.self, from: JSONEncoder().encode(settings)).reasoningEffort, effort)
+        }
     }
 
     func testImageImportAppliesOrientationDownsamplesAndProducesPersistableObject() throws {

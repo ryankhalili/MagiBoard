@@ -1,18 +1,21 @@
-# MagiBoard · v0.3
+# MagiBoard · v0.3.1
 
 A native iPad whiteboard for handwriting, interactive objects, and an AI assistant that works where you point. Built for MadHacks with original Swift and Python code; no whiteboard application's source was copied or forked.
 
 ## What you can do
 
-- Write with Apple Pencil using PencilKit pens, pencil, highlighter, eraser, and ink lasso. Pan, zoom, select objects, resize, duplicate, and undo.
+- Write with Apple Pencil using PencilKit pens, pencil, highlighter, and eraser. The lasso selects handwriting and objects together, with visible copy, paste, duplicate, delete, and drag actions. Pan, zoom, resize objects, and undo.
+- Optionally turn closed pen or pencil strokes into clean circles, rectangles, or triangles when you lift the Pencil. Recognition preserves the drawn orientation; Undo restores the original ink.
 - Organize notebooks in the sliding library sidebar. Add named page regions, choose blank/dotted/ruled/grid paper, and collapse the drawing toolbar.
 - Create editable geometry, graphs, text, images, and bare mathematical expressions. The native equation editor previews fractions, scripts, roots, integrals, sums, Greek letters, and more as you type, with a math keyboard accessory and clear syntax errors.
 - Build interactive HTML objects with sliders, number fields, switches, and choices. While **Interact** is enabled, an object can create, duplicate, or update real canvas objects through a bounded document API—for example, a coin that duplicates onto the whiteboard.
-- Focus Magic Pen on a point or rectangle and type a request. Up to four tasks can run while you keep writing or move elsewhere; each keeps its original reference and appears in the task list. In voice mode, speak a request, hear the reply, and continue with the next request hands-free.
-- Reuse objects from the local catalog or share an editable `.magiboardobject` package. With a configured Mac companion, explicitly save and load versioned objects in a Databricks cloud catalog.
+- Focus Magic Pen on a point or rectangle and type a request. Up to four tasks can run while you keep writing or move elsewhere; each keeps its original reference and appears in the task list. Leaving Magic Pen does not cancel submitted work. In voice mode, speak a request, hear the reply, and continue hands-free; selecting a new reference lets you start another request while previous work continues.
+- Browse 16 original starter objects and local/cloud libraries with search, kind filters, previews, and grid/list views. Save a reusable local object, share an editable `.magiboardobject` package, or explicitly save a version to Databricks through the configured Mac companion.
 - Search imported PDF references, place pages on the canvas, and write over them. Import images and export a region as PNG/PDF or a complete editable notebook.
 
 Settings are organized into Account, Voice & Magic, Canvas, Storage, and About. Drawing works without an AI connection; a small, explicitly labeled offline command set demonstrates common geometry edits and example objects.
+
+The Thinking level setting forwards Fast, Balanced, Deep, or Very deep to each new agent request. Fast uses the existing low-effort default; higher levels can take longer. Ordinary canvas requests skip full-text PDF retrieval.
 
 ## Build the iPad app
 
@@ -68,7 +71,7 @@ Standalone model, store, and PDF checks are also available in `Tests/`. See [val
 
 ## Prototype limits
 
-- The expanding canvas has practical limits: 2,000 objects and 40 MB of ink per notebook. Imported PDFs are limited to 40 MB and 300 pages. PDF search uses embedded text, not OCR.
+- The expanding canvas has practical limits: 2,000 objects and 40 MB of ink per notebook. Imported PDFs support files up to 1 GB without a page-count cap; search uses embedded text, not OCR. Large or complex documents can take longer to search or render.
 - Interactive objects run isolated, network-blocked HTML/JavaScript. Their typed canvas actions are validated, undoable, and available only in interaction mode. They do not provide arbitrary native code, Python, shell access, or a persistent backend. Transient widget state may reset on reload; exports are static.
 - The original equation typesetter supports a documented [LaTeX subset](docs/ARCHITECTURE.md#equations), not full TeX. Matrices, cases/aligned environments, custom macros, and packages are unsupported. Handwriting conversion requires an explicit visual AI request. GIF imports are static; HTML objects can animate.
 - Concurrent tasks preserve unrelated edits and ink. A task that tries to change an object edited since its request is rejected and must be retried; this is not automatic collaborative merging.

@@ -29,7 +29,7 @@ struct StudioView: View {
     @State private var showJobs = false
     @State private var showPhotos = false
     @State private var importError: String?
-    @State private var voiceRequestID: UUID?
+    @StateObject private var voiceTasks = VoiceTaskSession()
     @State private var showImport = false
     @State private var prompt = ""
     @State private var shareURL: URL?
@@ -48,7 +48,9 @@ struct StudioView: View {
             Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
             NativeCanvas(store: store) {
                 promptFocused = false
-                if store.settings.voiceMode && !conversation.active { startConversation() }
+                if conversation.active && conversation.canStartNewReference {
+                    stopConversation(); startConversation()
+                } else if store.settings.voiceMode && !conversation.active { startConversation() }
             }.ignoresSafeArea(.keyboard).ignoresSafeArea(edges: .bottom)
             VStack(spacing: 0) {
                 topBar
@@ -59,7 +61,7 @@ struct StudioView: View {
                             .font(.system(size: 12, weight: .medium)).foregroundStyle(accent)
                             .padding(.horizontal, 14).padding(.vertical, 9).background(.regularMaterial, in: Capsule())
                     }
-                    if !store.selectedIDs.isEmpty && store.tool == .select {
+                    if store.hasSelection && [.select, .lasso].contains(store.tool) {
                         selectionActions
                     }
                     if !store.selectedIDs.isEmpty && showInspector && store.tool == .select {
@@ -71,8 +73,8 @@ struct StudioView: View {
                     }
                 }.padding(.horizontal, 20).padding(.top, 12)
                 Spacer(minLength: 8)
-                bottomBar.padding(.horizontal, 20).padding(.bottom, 16)
-            }
+                bottomBar.padding(.horizontal, 20).padding(.bottom, 20)
+            }.ignoresSafeArea(.container, edges: .bottom)
         }
         .tint(accent)
         .alert("Notebook name", isPresented: $renameNotebook) {
@@ -147,10 +149,17 @@ struct StudioView: View {
         .onChange(of: ribbonTab) { _, _ in store.settings.toolbarCollapsed = false }
         .onChange(of: store.tool) { old, tool in
             if old == .magic && tool != .magic { store.reference = nil; stopConversation(); voice.stop(); promptFocused = false }
-            if tool == .magic { store.selectedIDs = [] }
+            if tool == .magic { store.clearSelection() }
             if tool == .select { showInspector = true }
         }
         .onChange(of: store.selectedIDs) { _, ids in if !ids.isEmpty { showInspector = true } }
+        .onChange(of: agent.jobs) { _, jobs in
+            if let id = voiceTasks.requestID, conversation.active,
+               jobs.first(where: { $0.id == id })?.state == .cancelled {
+                stopConversation()
+                if store.tool == .magic { startConversation() }
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { store.save(); voice.stop(); stopConversation() }
         }
@@ -243,13 +252,13 @@ struct StudioView: View {
                             Divider().frame(height: 30)
                             Button {
                                 store.tool = .select
-                                store.selectedIDs = Set(store.notebook.objects.map(\.id))
-                            } label: { ribbonLabel("All objects", "square.dashed.inset.filled") }
-                                .disabled(store.notebook.objects.isEmpty).accessibilityIdentifier("selectAllObjects")
-                            Button { NotificationCenter.default.post(name: .canvasCopySelection, object: nil) } label: { ribbonLabel("Copy", "doc.on.doc") }.disabled(store.selectedIDs.isEmpty)
+                                store.selectAll()
+                            } label: { ribbonLabel("Select all", "square.dashed.inset.filled") }
+                                .disabled(store.notebook.objects.isEmpty && store.worldInk.strokes.isEmpty).accessibilityIdentifier("selectAllObjects")
+                            Button { NotificationCenter.default.post(name: .canvasCopySelection, object: nil) } label: { ribbonLabel("Copy", "doc.on.doc") }.disabled(!store.hasSelection)
                             Button { NotificationCenter.default.post(name: .canvasPasteSelection, object: nil) } label: { ribbonLabel("Paste", "doc.on.clipboard") }
-                            Button { NotificationCenter.default.post(name: .canvasDuplicateSelection, object: nil) } label: { ribbonLabel("Duplicate", "plus.square.on.square") }.disabled(store.selectedIDs.isEmpty)
-                            Button { NotificationCenter.default.post(name: .canvasDeleteSelection, object: nil) } label: { ribbonLabel("Delete", "trash") }.disabled(store.selectedIDs.isEmpty)
+                            Button { NotificationCenter.default.post(name: .canvasDuplicateSelection, object: nil) } label: { ribbonLabel("Duplicate", "plus.square.on.square") }.disabled(!store.hasSelection)
+                            Button { NotificationCenter.default.post(name: .canvasDeleteSelection, object: nil) } label: { ribbonLabel("Delete", "trash") }.disabled(!store.hasSelection)
                             Divider().frame(height: 30)
                             insertMenu
                             Button { showCatalog = true } label: { ribbonLabel("Catalog", "square.grid.2x2") }
@@ -367,13 +376,15 @@ struct StudioView: View {
     private var selectionActions: some View {
         HStack(spacing: 16) {
             Button { NotificationCenter.default.post(name: .canvasCopySelection, object: nil) } label: { Label("Copy", systemImage: "doc.on.doc") }.accessibilityIdentifier("selectionCopy")
-            Button { NotificationCenter.default.post(name: .canvasPasteSelection, object: nil) } label: { Image(systemName: "doc.on.clipboard") }.accessibilityLabel("Paste objects").accessibilityIdentifier("selectionPaste")
-            Button { NotificationCenter.default.post(name: .canvasDuplicateSelection, object: nil) } label: { Image(systemName: "plus.square.on.square") }.accessibilityLabel("Duplicate objects").accessibilityIdentifier("selectionDuplicate")
+            Button { NotificationCenter.default.post(name: .canvasPasteSelection, object: nil) } label: { Image(systemName: "doc.on.clipboard") }.accessibilityLabel("Paste selection").accessibilityIdentifier("selectionPaste")
+            Button { NotificationCenter.default.post(name: .canvasDuplicateSelection, object: nil) } label: { Image(systemName: "plus.square.on.square") }.accessibilityLabel("Duplicate selection").accessibilityIdentifier("selectionDuplicate")
             if store.selectedObjects.contains(where: { $0.kind == "widget" }) {
                 Button { NotificationCenter.default.post(name: .canvasInteractSelected, object: nil) } label: { Label("Interact", systemImage: "hand.tap") }.accessibilityIdentifier("selectionInteract")
             }
-            Button { showInspector.toggle() } label: { Image(systemName: "slider.horizontal.3") }.accessibilityLabel("Object properties")
-            Button(role: .destructive) { NotificationCenter.default.post(name: .canvasDeleteSelection, object: nil) } label: { Image(systemName: "trash") }.accessibilityLabel("Delete objects").accessibilityIdentifier("selectionDelete")
+            if !store.selectedObjects.isEmpty {
+                Button { showInspector.toggle() } label: { Image(systemName: "slider.horizontal.3") }.accessibilityLabel("Object properties")
+            }
+            Button(role: .destructive) { NotificationCenter.default.post(name: .canvasDeleteSelection, object: nil) } label: { Image(systemName: "trash") }.accessibilityLabel("Delete selection").accessibilityIdentifier("selectionDelete")
         }.font(.system(size: 13, weight: .medium)).padding(.horizontal, 15).padding(.vertical, 12)
             .background(.regularMaterial, in: Capsule()).shadow(color: .black.opacity(0.06), radius: 8, y: 3)
     }
@@ -381,12 +392,14 @@ struct StudioView: View {
     private var bottomBar: some View {
         HStack(alignment: .bottom, spacing: 14) {
             if store.settings.aiEnabled {
-                VStack(spacing: 7) {
                     Button {
                         if consumedMagicHold { consumedMagicHold = false; return }
                         store.tool = store.tool == .magic ? .pen : .magic
                     } label: {
-                        Image(systemName: "wand.and.stars").font(.system(size: 23, weight: .medium))
+                        VStack(spacing: 3) {
+                            Image(systemName: "wand.and.stars").font(.system(size: 23, weight: .medium))
+                            Text("Magic Pen").font(.system(size: 8, weight: .semibold))
+                        }
                             .foregroundStyle(.white).frame(width: 58, height: 58)
                             .background(LinearGradient(colors: [accent, Color(red: 0.47, green: 0.32, blue: 0.89)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 20))
                             .shadow(color: accent.opacity(0.22), radius: 12, y: 5)
@@ -396,17 +409,9 @@ struct StudioView: View {
                             store.tool = .magic
                             if store.settings.voiceMode { startConversation() }
                         })
-                    Text("MAGIC PEN").font(.system(size: 8, weight: .semibold)).tracking(1).foregroundStyle(.secondary)
-                }
             }
             if showMagic && store.settings.aiEnabled {
                 magicPanel.frame(maxWidth: 640)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(store.tool.label).font(.system(size: 12, weight: .medium))
-                    Text(toolHint)
-                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                }.padding(.bottom, 18).allowsHitTesting(false)
             }
             Spacer(minLength: 0)
             HStack(spacing: 12) {
@@ -421,7 +426,9 @@ struct StudioView: View {
                     .accessibilityLabel("Fit content").accessibilityIdentifier("fit")
                 Text("\(Int(store.zoom * 100))%").font(.system(size: 12, weight: .medium, design: .monospaced)).frame(width: 43)
                 Button { showHelp = true } label: { Image(systemName: "questionmark.circle") }.accessibilityLabel("Help")
-            }.foregroundStyle(.secondary).padding(13).background(.regularMaterial, in: Capsule()).padding(.bottom, 16)
+            }.foregroundStyle(.secondary).padding(.horizontal, 15).frame(height: 58)
+                .background(.regularMaterial, in: Capsule()).accessibilityElement(children: .contain)
+                .accessibilityIdentifier("canvasNavigation")
         }
     }
 
@@ -471,6 +478,12 @@ struct StudioView: View {
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                     ProgressView(value: conversation.level).tint(accent).accessibilityLabel("Microphone level")
+                    if conversation.canStartNewReference {
+                        Button("New request", systemImage: "plus.bubble") { stopConversation(); startConversation() }
+                            .font(.caption.weight(.medium)).accessibilityIdentifier("newVoiceRequest")
+                        Text("This task keeps working. Tap another canvas area to speak a new request.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }.accessibilityIdentifier("voiceConversation")
             } else {
                 HStack(alignment: .bottom, spacing: 10) {
@@ -514,7 +527,7 @@ struct StudioView: View {
         case .pen, .pencil, .highlighter: return store.settings.drawWithFinger ? "Draw with Pencil or finger · two fingers to move" : "Apple Pencil to write · fingers to move"
         case .select: return "Tap an object · drag to move · corner to resize"
         case .hand: return "Drag with finger or Pencil · pinch to zoom"
-        case .lasso: return "Circle handwriting to move or copy it"
+        case .lasso: return "Circle ink and objects · drag selection to move · use Copy or Duplicate"
         case .eraser: return "Erase handwriting with your Pencil"
         case .magic: return "Tap or drag to focus · two fingers to move and zoom"
         }
@@ -533,23 +546,27 @@ struct StudioView: View {
         Task { await voice.start() }
     }
     private func stopConversation() {
+        // Listening belongs to the current voice session. Submitted canvas jobs
+        // belong to the task list and keep running when this session is closed.
+        voiceTasks.detach()
         conversation.stop()
-        if let id = voiceRequestID { agent.cancel(id); voiceRequestID = nil }
     }
     private func startConversation() {
         guard store.settings.aiEnabled, !conversation.active else { return }
         voice.stop(); voice.clearError(); promptFocused = false; store.tool = .magic
         conversation.localeIdentifier = store.settings.speechLocale
         conversation.spokenReplies = store.settings.spokenReplies
+        let session = voiceTasks.begin()
         Task {
+            guard voiceTasks.contains(session) else { return }
             await conversation.start { command in
-                voiceRequestID = agent.send(command, store: store, library: library) { message, failed in
-                    voiceRequestID = nil
+                guard voiceTasks.contains(session) else { return }
+                let request = voiceTasks.send(command, agent: agent, store: store, library: library) { message, failed in
                     guard conversation.active else { return }
                     if failed { conversation.receiveFailure(message) }
                     else { conversation.receiveReply(message) }
                 }
-                if voiceRequestID == nil { conversation.receiveFailure("All four task slots are busy. Try again after one finishes.") }
+                if request == nil { conversation.receiveFailure("All four task slots are busy. Try again after one finishes.") }
             }
         }
     }
@@ -588,8 +605,10 @@ struct StudioView: View {
         let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
         switch url.pathExtension.lowercased() {
         case "pdf":
-            do { try library.importDocument(url: url); showReferences = true }
-            catch { store.status = error.localizedDescription }
+            Task {
+                do { try await library.importDocument(url: url); showReferences = true }
+                catch { store.status = error.localizedDescription }
+            }
         case "magiboardobject":
             if store.importObjectPackage(url) { showCatalog = true }
         case "canvaspair": ConnectionClient.importPairing(url, into: store); Task { await agent.check(store.settings) }
@@ -611,7 +630,7 @@ struct StudioView: View {
             List {
                 Section("A native space to think") {
                     Label("Write with Apple Pencil. Pan with fingers and pinch to zoom.", systemImage: "pencil.tip")
-                    Label("Ink lasso selects handwriting. The arrow selects and resizes objects.", systemImage: "lasso")
+                    Label("Lasso circles ink and objects together. Drag the selection to move it, or use its Copy, Paste, Duplicate and Delete buttons.", systemImage: "lasso")
                     Label("Choose Magic Pen, then tap a point or drag an area. Type, dictate, or choose Voice for a hands-free conversation.", systemImage: "wand.and.stars")
                     Label("A reference guides the agent; it does not limit the size of its creation.", systemImage: "scope")
                 }

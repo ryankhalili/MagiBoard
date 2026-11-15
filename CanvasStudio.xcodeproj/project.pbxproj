@@ -16,11 +16,13 @@ A601 = {isa = XCBuildConfiguration; buildSettings = {SDKROOT = iphoneos; CLANG_E
 A602 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = org.madhacks.CanvasStudio; CODE_SIGN_STYLE = Automatic; INFOPLIST_FILE = Info.plist; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; ENABLE_TESTABILITY = YES; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; SUPPORTS_MACCATALYST = YES; }; name = Debug; };
 A603 = {isa = XCBuildConfiguration; buildSettings = {PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = org.madhacks.CanvasStudio; CODE_SIGN_STYLE = Automatic; INFOPLIST_FILE = Info.plist; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_OPTIMIZATION_LEVEL = "-O"; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; SUPPORTS_MACCATALYST = YES; }; name = Release; };
 
-B400 = {isa = PBXGroup; children = (B410,B411,B412,B413,B414,B415,C400); path = Tests; sourceTree = "<group>"; };
+B400 = {isa = PBXGroup; children = (B410,B411,B412,B413,B414,B415,B416,B417,C400); path = Tests; sourceTree = "<group>"; };
 B410 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotebookStoreTests.swift; sourceTree = "<group>"; };
 B411 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasRendererTests.swift; sourceTree = "<group>"; };
 B413 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EquationTests.swift; sourceTree = "<group>"; };
 B414 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTaskTests.swift; sourceTree = "<group>"; };
+B416 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixedSelectionTests.swift; sourceTree = "<group>"; };
+B417 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFLibraryTests.swift; sourceTree = "<group>"; };
 B415 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudCatalogTests.swift; sourceTree = "<group>"; };
 B412 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceLifecycleTests.swift; sourceTree = "<group>"; };
 C400 = {isa = PBXGroup; children = (C410); path = UI; sourceTree = "<group>"; };
@@ -29,6 +31,8 @@ B420 = {isa = PBXBuildFile; fileRef = B410; };
 B421 = {isa = PBXBuildFile; fileRef = B411; };
 B423 = {isa = PBXBuildFile; fileRef = B413; };
 B424 = {isa = PBXBuildFile; fileRef = B414; };
+B426 = {isa = PBXBuildFile; fileRef = B416; };
+B427 = {isa = PBXBuildFile; fileRef = B417; };
 B425 = {isa = PBXBuildFile; fileRef = B415; };
 B422 = {isa = PBXBuildFile; fileRef = B412; };
 C420 = {isa = PBXBuildFile; fileRef = C410; };
@@ -36,7 +40,7 @@ B403 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIn
 C403 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CanvasStudioUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 B200 = {isa = PBXNativeTarget; buildConfigurationList = B300; buildPhases = (B500,B501,B502); buildRules = (); dependencies = (B701); name = CanvasStudioTests; productName = CanvasStudioTests; productReference = B403; productType = "com.apple.product-type.bundle.unit-test"; };
 C200 = {isa = PBXNativeTarget; buildConfigurationList = C300; buildPhases = (C500,C501,C502); buildRules = (); dependencies = (C701); name = CanvasStudioUITests; productName = CanvasStudioUITests; productReference = C403; productType = "com.apple.product-type.bundle.ui-testing"; };
-B500 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B420,B421,B422,B423,B424,B425); runOnlyForDeploymentPostprocessing = 0; };
+B500 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B420,B421,B422,B423,B424,B425,B426,B427); runOnlyForDeploymentPostprocessing = 0; };
 B501 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 B502 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 C500 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (C420); runOnlyForDeploymentPostprocessing = 0; };

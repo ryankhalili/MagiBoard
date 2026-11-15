@@ -5,6 +5,29 @@ import AVFoundation
 import Combine
 import UIKit
 
+/// A voice session may detach from its submitted jobs. The jobs still mutate the
+/// canvas, while only the currently attached session can consume spoken replies.
+@MainActor
+final class VoiceTaskSession: ObservableObject {
+    private var generation = UUID()
+    private(set) var requestID: UUID?
+    @discardableResult func begin() -> UUID { generation = UUID(); requestID = nil; return generation }
+    func contains(_ id: UUID) -> Bool { generation == id }
+    func detach() { generation = UUID(); requestID = nil }
+    @discardableResult
+    func send(_ command: String, agent: ConnectionClient, store: NotebookStore, library: PDFLibrary,
+              completion: @escaping (String, Bool) -> Void) -> UUID? {
+        let session = generation
+        let id = agent.send(command, store: store, library: library) { [weak self] message, failed in
+            guard let self, self.generation == session else { return }
+            self.requestID = nil
+            completion(message, failed)
+        }
+        requestID = id
+        return id
+    }
+}
+
 /// Session identities fence permission responses, final results and cancelled tasks.
 struct VoiceSessionGate {
     enum Phase { case idle, starting, listening, finishing }
@@ -339,6 +362,7 @@ final class ConversationVoice: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var level: Double = 0
     var localeIdentifier = "en-US"
     var spokenReplies = true
+    var canStartNewReference: Bool { gate.phase == .thinking || gate.phase == .speaking }
 
     private let input = VoiceInput()
     private let speaker = AVSpeechSynthesizer()

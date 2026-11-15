@@ -20,6 +20,199 @@ final class CanvasRendererTests: XCTestCase {
         let cosine = (a.x * b.x + a.y * b.y) / (hypot(a.x, a.y) * hypot(b.x, b.y))
         return acos(Double(min(1, max(-1, cosine)))) * 180 / .pi
     }
+
+    private func contour(_ vertices: [CGPoint], scale: CGFloat = 1, rotation: CGFloat = 0,
+                         start: Int = 0, reverse: Bool = false, noise: CGFloat = 0) -> [CGPoint] {
+        var samples: [CGPoint] = []
+        for i in vertices.indices {
+            let a = vertices[i], b = vertices[(i + 1) % vertices.count]
+            // Unequal sampling density models speed changes and pauses at corners.
+            let count = [19, 37, 29, 43][i % 4]
+            for n in 0..<count {
+                let t = CGFloat(n) / CGFloat(count)
+                samples.append(CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
+            }
+        }
+        if reverse { samples.reverse() }
+        let split = start % samples.count
+        samples = Array(samples[split...]) + Array(samples[..<split])
+        samples = samples.enumerated().map { index, point in
+            let x = point.x + sin(CGFloat(index) * 1.7) * noise
+            let y = point.y + cos(CGFloat(index) * 2.3) * noise
+            return CGPoint(x: (x * cos(rotation) - y * sin(rotation)) * scale - 240,
+                           y: (x * sin(rotation) + y * cos(rotation)) * scale + 130)
+        }
+        return samples + [samples[0]]
+    }
+    private func circlePoints(scale: CGFloat = 1, start: CGFloat = 0, reverse: Bool = false, turns: CGFloat = 1) -> [CGPoint] {
+        (0...180).map { i in
+            let t = pow(CGFloat(i) / 180, 1.3)
+            let a = start + t * 2 * .pi * turns * (reverse ? -1 : 1)
+            let radius = 100 + sin(CGFloat(i) * 1.8) * 1.2
+            return CGPoint(x: -180 + cos(a) * radius * scale, y: 230 + sin(a) * radius * scale)
+        }
+    }
+    private func stroke(_ points: [CGPoint], createdAt: Date = Date(), color: UIColor = .blue, seed: UInt32 = 123) -> PKStroke {
+        let controls = points.enumerated().map { index, point in
+            PKStrokePoint(location: point, timeOffset: Double(index) * 0.01, size: CGSize(width: 3, height: 3),
+                          opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }
+        return PKStroke(ink: PKInk(.pen, color: color), path: PKStrokePath(controlPoints: controls, creationDate: createdAt), randomSeed: seed)
+    }
+    private func putDrawing(_ strokes: [PKStroke], in view: CanvasHostView) {
+        view.ink.drawing = PKDrawing(strokes: strokes).transformed(using: CGAffineTransform(translationX: view.inkOrigin.x, y: view.inkOrigin.y))
+        view.canvasViewDrawingDidChange(view.ink)
+    }
+    private func recognizingCanvas() throws -> (NotebookStore, CanvasHostView) {
+        let store = try store()
+        store.settings.recognizeShapes = true; store.tool = .pen; store.lineWidth = 3
+        let view = CanvasHostView(store: store)
+        view.frame = CGRect(x: 0, y: 0, width: 1000, height: 800); view.layoutIfNeeded()
+        return (store, view)
+    }
+    func testRecognizesNoisyCirclesAcrossScaleStartAndWinding() throws {
+        for scale: CGFloat in [0.25, 1, 3] {
+            for start: CGFloat in [0, 0.7, 2.4] {
+                for reverse in [false, true] {
+                    let result = try XCTUnwrap(StrokeShapeRecognizer.recognize(circlePoints(scale: scale, start: start, reverse: reverse)))
+                    XCTAssertEqual(result.kind, "circle")
+                    XCTAssertEqual(result.bounds.midX, -180, accuracy: 3 * scale)
+                    XCTAssertEqual(result.bounds.midY, 230, accuracy: 3 * scale)
+                    XCTAssertEqual(result.bounds.width, result.bounds.height, accuracy: 0.001)
+                }
+            }
+        }
+    }
+    func testRecognizesRotatedSquaresAndRectanglesWithoutChangingOrientation() throws {
+        for width: CGFloat in [200, 310] {
+            let corners = [CGPoint(x: 0, y: 0), CGPoint(x: width, y: 0), CGPoint(x: width, y: 200), CGPoint(x: 0, y: 200)]
+            for scale: CGFloat in [0.25, 1, 2] {
+                for rotation: CGFloat in [0, 0.35, 0.79, 2.4] {
+                    for reverse in [false, true] {
+                        let result = try XCTUnwrap(StrokeShapeRecognizer.recognize(contour(corners, scale: scale, rotation: rotation, start: 31, reverse: reverse, noise: 1.5)))
+                        XCTAssertEqual(result.kind, "rectangle")
+                        XCTAssertEqual(result.title, width == 200 ? "Square" : "Rectangle")
+                        XCTAssertEqual(result.vertices.count, 4)
+                        for i in 0..<4 {
+                            XCTAssertEqual(angle(result.vertices[i], result.vertices[(i + 3) % 4], result.vertices[(i + 1) % 4]), 90, accuracy: 0.001)
+                        }
+                        let actual = atan2(result.vertices[1].y - result.vertices[0].y, result.vertices[1].x - result.vertices[0].x)
+                        XCTAssertLessThan(abs(sin((actual - rotation) * 2)), 0.08, "Preserve the original rectangle axes")
+                    }
+                }
+            }
+        }
+    }
+    func testRecognizesTrianglesFromEveryEdgeAndWindingWithRealVertices() throws {
+        let vertices = [CGPoint(x: 0, y: 0), CGPoint(x: 240, y: 35), CGPoint(x: 60, y: 190)]
+        for scale: CGFloat in [0.3, 1, 2] {
+            for start in [0, 12, 33, 70] {
+                for reverse in [false, true] {
+                    let result = try XCTUnwrap(StrokeShapeRecognizer.recognize(contour(vertices, scale: scale, rotation: 0.65, start: start, reverse: reverse, noise: 1)))
+                    XCTAssertEqual(result.kind, "triangle")
+                    XCTAssertEqual(result.vertices.count, 3)
+                    for original in vertices {
+                        let expected = CGPoint(x: (original.x * cos(0.65) - original.y * sin(0.65)) * scale - 240,
+                                               y: (original.x * sin(0.65) + original.y * cos(0.65)) * scale + 130)
+                        XCTAssertLessThan(result.vertices.map { hypot($0.x - expected.x, $0.y - expected.y) }.min()!, 8 * scale,
+                                          "Keep the user's corners rather than replacing the triangle with an upright template")
+                    }
+                    let object = result.object(color: .blue, width: 3)
+                    XCTAssertEqual(object.shape, "polygon", "A fitted outline must not acquire unrelated canonical angle controls")
+                    XCTAssertNil(object.properties["angleA"])
+                    let rendered = try XCTUnwrap(RecognizedPolygonGeometry.vertices(for: object))
+                    for (a, b) in zip(rendered, result.vertices) {
+                        XCTAssertEqual(a.x, b.x, accuracy: 0.0001); XCTAssertEqual(a.y, b.y, accuracy: 0.0001)
+                    }
+                }
+            }
+        }
+    }
+    func testRecognitionRejectsOpenContoursCrossingsAndRepeatedLoops() {
+        XCTAssertNil(StrokeShapeRecognizer.recognize(circlePoints(turns: 0.75)))
+        XCTAssertNil(StrokeShapeRecognizer.recognize(circlePoints(turns: 2)))
+        let square = contour([CGPoint(x: 0, y: 0), CGPoint(x: 200, y: 0), CGPoint(x: 200, y: 200), CGPoint(x: 0, y: 200)])
+        XCTAssertNil(StrokeShapeRecognizer.recognize(Array(square.dropLast(35))))
+        let crossing = contour([CGPoint(x: 0, y: 0), CGPoint(x: 200, y: 200), CGPoint(x: 200, y: 0), CGPoint(x: 0, y: 200)])
+        XCTAssertNil(StrokeShapeRecognizer.recognize(crossing))
+    }
+    func testDelayedStrokeCommitRecognizesImmediatelyAndUndoRestoresRawInk() throws {
+        let (store, view) = try recognizingCanvas()
+        view.canvasViewDidBeginUsingTool(view.ink)
+        let raw = stroke(circlePoints(), color: .blue)
+        view.canvasViewDidEndUsingTool(view.ink)
+        XCTAssertTrue(store.notebook.objects.isEmpty)
+        store.colorHex = "#EF4444"; store.lineWidth = 19
+        putDrawing([raw], in: view)
+        XCTAssertEqual(store.notebook.objects.count, 1, "No second touch is needed after PencilKit commits")
+        XCTAssertTrue(view.worldDrawing.strokes.isEmpty)
+        XCTAssertEqual(store.notebook.objects[0].color, "#0000FFFF")
+        XCTAssertEqual(store.notebook.objects[0].properties["strokeWidth"], 3)
+        XCTAssertEqual(store.tool, .pen); XCTAssertTrue(store.selectedIDs.isEmpty)
+        store.undo(); view.synchronize()
+        XCTAssertTrue(store.notebook.objects.isEmpty)
+        XCTAssertEqual(view.worldDrawing.strokes.map(ShapeStrokeIdentity.init), [ShapeStrokeIdentity(raw)])
+        store.redo(); view.synchronize()
+        XCTAssertEqual(store.notebook.objects.count, 1); XCTAssertTrue(view.worldDrawing.strokes.isEmpty)
+    }
+    func testCommittedStrokeWaitsForLiftAndQuickNextStrokeSurvives() throws {
+        let (store, view) = try recognizingCanvas()
+        view.canvasViewDidBeginUsingTool(view.ink)
+        let shape = stroke(circlePoints(), seed: 11)
+        putDrawing([shape], in: view)
+        XCTAssertTrue(store.notebook.objects.isEmpty, "Do not convert an active stroke")
+        view.canvasViewDidEndUsingTool(view.ink)
+        XCTAssertEqual(store.notebook.objects.count, 1, "Drawing-before-end callback order also works")
+
+        store.undo(); view.synchronize()
+        store.undo(); view.synchronize()
+        view.canvasViewDidBeginUsingTool(view.ink)
+        let delayed = stroke(circlePoints(), seed: 22)
+        view.canvasViewDidEndUsingTool(view.ink)
+        view.canvasViewDidBeginUsingTool(view.ink)
+        let following = stroke([CGPoint(x: 250, y: 100), CGPoint(x: 310, y: 145), CGPoint(x: 360, y: 160)], seed: 33)
+        putDrawing([delayed], in: view)
+        XCTAssertTrue(store.notebook.objects.isEmpty, "Do not replace drawing while a later stroke is active")
+        putDrawing([delayed, following], in: view)
+        view.canvasViewDidEndUsingTool(view.ink)
+        XCTAssertEqual(store.notebook.objects.count, 1)
+        XCTAssertEqual(view.worldDrawing.strokes.map(ShapeStrokeIdentity.init), [ShapeStrokeIdentity(following)], "Remove the recognized stroke, never the last stroke")
+        XCTAssertEqual(try PKDrawing(data: store.notebook.drawingData).strokes.map(ShapeStrokeIdentity.init), [ShapeStrokeIdentity(following)])
+    }
+    func testRenderingCallbackAndObjectLimitNeverDiscardRawStroke() throws {
+        let (store, view) = try recognizingCanvas()
+        store.notebook.objects = (0..<2000).map { _ in CanvasObject() }; view.synchronize()
+        view.canvasViewDidBeginUsingTool(view.ink)
+        let raw = stroke(circlePoints(), seed: 44)
+        view.canvasViewDidEndUsingTool(view.ink)
+        view.ink.drawing = PKDrawing(strokes: [raw]).transformed(using: CGAffineTransform(translationX: view.inkOrigin.x, y: view.inkOrigin.y))
+        view.canvasViewDidFinishRendering(view.ink)
+        XCTAssertEqual(store.notebook.objects.count, 2000)
+        XCTAssertEqual(view.worldDrawing.strokes.map(ShapeStrokeIdentity.init), [ShapeStrokeIdentity(raw)])
+        XCTAssertEqual(try PKDrawing(data: store.notebook.drawingData).strokes.map(ShapeStrokeIdentity.init), [ShapeStrokeIdentity(raw)])
+        XCTAssertTrue(store.status.hasPrefix("Kept your ink"))
+    }
+    func testCancelledSessionCannotClaimFollowingStrokeOrSurviveExternalDrawingReplace() throws {
+        let (store, view) = try recognizingCanvas()
+        view.canvasViewDidBeginUsingTool(view.ink)
+        view.canvasViewDidEndUsingTool(view.ink) // Cancelled interaction, no committed path.
+        store.lineWidth = 8; view.synchronize()
+        view.canvasViewDidBeginUsingTool(view.ink)
+        let raw = stroke(circlePoints(), seed: 55)
+        view.canvasViewDidEndUsingTool(view.ink)
+        putDrawing([raw], in: view)
+        XCTAssertEqual(store.notebook.objects.count, 1)
+        XCTAssertEqual(store.notebook.objects[0].properties["strokeWidth"], 8, "Only the actual producing session owns this stroke")
+
+        view.canvasViewDidBeginUsingTool(view.ink)
+        let late = stroke(circlePoints(), seed: 66)
+        view.canvasViewDidEndUsingTool(view.ink)
+        let external = stroke([CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 40)], seed: 77)
+        store.setDrawing(PKDrawing(strokes: [external]).dataRepresentation()); view.synchronize()
+        putDrawing([external, late], in: view)
+        XCTAssertEqual(store.notebook.objects.count, 1, "Undo/import/external replacement must invalidate queued recognition")
+        XCTAssertEqual(view.worldDrawing.strokes.map(ShapeStrokeIdentity.init), [ShapeStrokeIdentity(external), ShapeStrokeIdentity(late)])
+    }
     func testTriangleKeepsRequestedAnglesAcrossAspectRatios() {
         for (a, b) in [(49.0, 52.0), (120.0, 29.0), (1.0, 89.0), (35.5, 70.25)] {
             for area in [CGRect(x: -500, y: -200, width: 270, height: 190), CGRect(x: 4, y: 6, width: 90, height: 500)] {
@@ -47,6 +240,37 @@ final class CanvasRendererTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(visible.minY, 159.9)
             XCTAssertLessThanOrEqual(visible.maxY, size.height - 99.9)
         }
+    }
+    func testPinchDefersNativeDrawingReplacementAndRebaseUntilZoomEnds() throws {
+        let store = try store()
+        store.setDrawing(negativeDrawing().dataRepresentation())
+        let view = CanvasHostView(store: store)
+        view.frame = CGRect(x: 0, y: 0, width: 900, height: 700); view.layoutIfNeeded()
+        XCTAssertFalse(view.ink.bouncesZoom)
+        let originalOrigin = view.inkOrigin
+        let originalInk = view.ink.drawing.dataRepresentation()
+        view.scrollViewWillBeginZooming(view.ink, with: nil)
+        view.ink.setContentOffset(CGPoint(x: 100, y: 100), animated: false)
+        let camera = view.worldContentOffset
+        // A companion pan ending before the pinch must not replace the live surface.
+        view.scrollViewDidEndDragging(view.ink, willDecelerate: false)
+        XCTAssertEqual(view.inkOrigin, originalOrigin)
+        XCTAssertEqual(view.ink.drawing.dataRepresentation(), originalInk)
+        let replacement = negativeDrawing().transformed(using: CGAffineTransform(translationX: 800, y: 300))
+        store.setDrawing(replacement.dataRepresentation())
+        let modelData = store.notebook.drawingData
+        view.synchronize()
+        view.canvasViewDidFinishRendering(view.ink)
+        view.canvasViewDrawingDidChange(view.ink)
+        XCTAssertEqual(view.ink.drawing.dataRepresentation(), originalInk, "Defer external ink edits until PencilKit releases its zoom surface")
+        XCTAssertEqual(store.notebook.drawingData, modelData, "A rendering callback must not overwrite an external edit")
+        view.scrollViewDidEndZooming(view.ink, with: nil, atScale: view.ink.zoomScale)
+        XCTAssertGreaterThan(view.inkOrigin.x, originalOrigin.x)
+        XCTAssertEqual(view.worldContentOffset.x, camera.x, accuracy: 0.01)
+        XCTAssertEqual(view.worldContentOffset.y, camera.y, accuracy: 0.01)
+        XCTAssertEqual(view.worldDrawing.bounds.minX, replacement.bounds.minX, accuracy: 0.01)
+        XCTAssertEqual(view.worldDrawing.bounds.minY, replacement.bounds.minY, accuracy: 0.01)
+        XCTAssertEqual(store.notebook.drawingData, modelData)
     }
     func testNativeRebasePreservesWorldDrawingCameraAndUndo() throws {
         let store = try store()
@@ -232,7 +456,7 @@ final class CanvasRendererTests: XCTestCase {
         let camera = view.worldContentOffset
         for tool in CanvasTool.allCases {
             store.tool = tool; view.synchronize()
-            XCTAssertEqual(view.ink.allowsInkEditingMenu, tool == .lasso)
+            XCTAssertFalse(view.ink.allowsInkEditingMenu, "Combined lasso uses the canvas clipboard bar rather than PencilKit's ink-only menu")
             if tool != .lasso { XCTAssertFalse(view.ink.canPerformAction(#selector(UIResponderStandardEditActions.selectAll(_:)), withSender: nil)) }
             view.ink.scrollRectToVisible(CGRect(x: 0, y: 0, width: 300, height: 300), animated: false)
             view.frame.size.height = 500; view.setNeedsLayout(); view.layoutIfNeeded()

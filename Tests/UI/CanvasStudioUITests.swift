@@ -80,6 +80,77 @@ final class CanvasStudioUITests: XCTestCase {
         selectAll.tap()
     }
 
+    func testCatalogSearchPreviewLayoutAndEditableGraphInsertion() throws {
+        let app = launch()
+        let canvas = app.otherElements["infiniteCanvas"]
+        let initialObjects = try XCTUnwrap(canvasState(canvas)["objects"])
+        app.buttons["tab_home"].tap()
+        let catalog = app.buttons["Catalog"]
+        XCTAssertTrue(catalog.waitForExistence(timeout: 4))
+        catalog.tap()
+        let locations = app.segmentedControls["catalogLocation"]
+        XCTAssertTrue(locations.waitForExistence(timeout: 4))
+        XCTAssertTrue(locations.buttons["Starter"].isSelected)
+        XCTAssertTrue(app.staticTexts["16 objects"].waitForExistence(timeout: 4))
+        let layout = app.segmentedControls["catalogLayout"]
+        XCTAssertTrue(layout.waitForExistence(timeout: 4))
+        layout.buttons["Grid"].tap()
+        let firstCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "catalogInsert_")).firstMatch
+        XCTAssertTrue(firstCard.waitForExistence(timeout: 4))
+        let gridAttachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        gridAttachment.name = "MagiBoard starter object grid"
+        gridAttachment.lifetime = .keepAlways
+        add(gridAttachment)
+
+        app.buttons["catalogKindFilter"].tap()
+        let graphs = app.buttons["Graphs"].firstMatch
+        XCTAssertTrue(graphs.waitForExistence(timeout: 3))
+        graphs.tap()
+        XCTAssertTrue(app.staticTexts["3 objects"].waitForExistence(timeout: 3))
+        let search = app.searchFields["Search objects"]
+        XCTAssertTrue(search.waitForExistence(timeout: 3))
+        search.tap(); search.typeText("parabola\n")
+        XCTAssertTrue(app.staticTexts["1 objects"].waitForExistence(timeout: 4))
+        layout.buttons["List"].tap()
+        XCTAssertTrue(layout.buttons["List"].isSelected)
+        let actions = app.buttons["Actions for Parabola"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 3))
+        actions.tap()
+        let preview = app.buttons["Preview"].firstMatch
+        XCTAssertTrue(preview.waitForExistence(timeout: 3))
+        preview.tap()
+        let previewBar = app.navigationBars["Parabola"]
+        XCTAssertTrue(previewBar.waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Editable controls"].exists)
+        XCTAssertTrue(app.buttons["catalogPreviewInsert"].exists)
+        previewBar.buttons["Done"].tap()
+        XCTAssertTrue(layout.waitForExistence(timeout: 4))
+        layout.buttons["Grid"].tap()
+        XCTAssertTrue(layout.buttons["Grid"].isSelected)
+        let matchedCard = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "catalogInsert_")).firstMatch
+        XCTAssertTrue(matchedCard.waitForExistence(timeout: 4))
+        XCTAssertEqual(matchedCard.label, "Insert Parabola")
+        matchedCard.tap()
+        expectCanvas(canvas, "Inserting a catalog object creates one independent graph") {
+            $0["objects"] == initialObjects + 1 && $0["selected"] == 1
+        }
+        XCTAssertEqual(app.textFields["Object name"].value as? String, "Parabola")
+        let amplitude = app.sliders["Amplitude"]
+        XCTAssertTrue(amplitude.waitForExistence(timeout: 4))
+        let before = amplitude.value as? String
+        amplitude.adjust(toNormalizedSliderPosition: 0.7)
+        XCTAssertNotEqual(amplitude.value as? String, before)
+        XCTAssertTrue(app.buttons["Edit expression"].exists)
+        let insertedAttachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        insertedAttachment.name = "MagiBoard editable catalog graph"
+        insertedAttachment.lifetime = .keepAlways
+        add(insertedAttachment)
+        app.buttons["undo"].tap()
+        expectCanvas(canvas, "Undoing a parameter change keeps the inserted graph") { $0["objects"] == initialObjects + 1 }
+        app.buttons["undo"].tap()
+        expectCanvas(canvas, "Catalog insertion is independently undoable") { $0["objects"] == initialObjects }
+    }
+
     func testGraphParameterChangeAndUndo() {
         let app = launch()
         app.buttons["insert"].tap()
@@ -299,6 +370,43 @@ final class CanvasStudioUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Redo"].isEnabled)
     }
 
+    func testLassoInkActionsAndSelectAllOperateOnInkAndObjectsTogether() throws {
+        let app = launch()
+        let canvas = app.otherElements["infiniteCanvas"]
+        let initialObjects = try XCTUnwrap(canvasState(canvas)["objects"])
+        app.buttons["settings"].tap(); settingsCategory("canvas", in: app)
+        let finger = app.switches["Draw with a finger"]
+        reveal(finger, in: app); setSwitch(finger, enabled: true)
+        app.buttons["Done"].tap()
+        app.buttons["tool_pen"].tap()
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.20, dy: 0.72)).press(forDuration: 0.1,
+            thenDragTo: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.43, dy: 0.72)))
+        expectCanvas(canvas, "The sample stroke was written") { $0["strokes"] == 1 }
+        app.buttons["tool_lasso"].tap()
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.30, dy: 0.72)).tap()
+        expectCanvas(canvas, "Lasso selects native handwriting") { $0["selectedStrokes"] == 1 && $0["selected"] == 0 }
+        XCTAssertTrue(app.buttons["selectionCopy"].waitForExistence(timeout: 3))
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.30, dy: 0.72)).press(forDuration: 1.2)
+        XCTAssertFalse(app.menuItems["Insert Space"].exists)
+        XCTAssertFalse(app.buttons["Insert Space"].exists)
+        app.buttons["selectionCopy"].tap()
+        app.buttons["selectionDuplicate"].tap()
+        expectCanvas(canvas, "Duplicate copies selected handwriting") { $0["strokes"] == 2 && $0["selectedStrokes"] == 1 && $0["objects"] == initialObjects }
+        app.buttons["selectionPaste"].tap()
+        expectCanvas(canvas, "Paste restores pressure-sensitive handwriting from the clipboard") { $0["strokes"] == 3 && $0["selectedStrokes"] == 1 }
+        app.buttons["selectionDelete"].tap()
+        expectCanvas(canvas, "Delete removes selected handwriting only") { $0["strokes"] == 2 && $0["selectedStrokes"] == 0 }
+        app.buttons["undo"].tap(); app.buttons["undo"].tap(); app.buttons["undo"].tap()
+        expectCanvas(canvas, "Undo restores the single original stroke") { $0["strokes"] == 1 && $0["objects"] == initialObjects }
+        app.buttons["tab_home"].tap(); app.buttons["selectAllObjects"].tap()
+        expectCanvas(canvas, "Select all includes the stroke and every canvas object") { $0["selected"] == initialObjects && $0["selectedStrokes"] == 1 }
+        keepScreenshot("Ink and object selection actions", in: app)
+        app.buttons["selectionDuplicate"].tap()
+        expectCanvas(canvas, "One duplicate action copies the mixed selection") { $0["objects"] == initialObjects * 2 && $0["strokes"] == 2 }
+        app.buttons["selectionDelete"].tap()
+        expectCanvas(canvas, "One delete action removes only the copied mixed selection") { $0["objects"] == initialObjects && $0["strokes"] == 1 }
+    }
+
     func testSettingsPersistAndAICanBeDisabled() {
         let app = launch()
         app.buttons["settings"].tap()
@@ -374,6 +482,27 @@ final class CanvasStudioUITests: XCTestCase {
             abs(tab.frame.height - expandedHeight) < 1
         }, object: tab)
         XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 4), .completed)
+    }
+
+    func testBottomCanvasControlsShareHeightAndBezelInsets() {
+        let app = launch()
+        let magic = app.buttons["magic"]
+        let navigation = app.descendants(matching: .any).matching(identifier: "canvasNavigation").firstMatch
+        XCTAssertTrue(navigation.waitForExistence(timeout: 4))
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.frame.width > app.frame.height && navigation.frame.height > 50 && magic.frame.height > 50
+        }, object: navigation)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 4), .completed)
+        let left = magic.frame, right = navigation.frame, screen = app.frame
+        XCTAssertEqual(left.height, 58, accuracy: 2)
+        XCTAssertEqual(right.height, 58, accuracy: 2)
+        XCTAssertEqual(left.maxY, right.maxY, accuracy: 2)
+        XCTAssertEqual(left.minX - screen.minX, screen.maxY - left.maxY, accuracy: 3)
+        XCTAssertEqual(screen.maxX - right.maxX, screen.maxY - right.maxY, accuracy: 3)
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "Aligned bottom canvas controls"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     func testRibbonTabsExposeWorkingHomeInsertAndViewActions() throws {

@@ -1,4 +1,4 @@
-# MagiBoard v0.3 architecture
+# MagiBoard v0.3.1 architecture
 
 The native app owns each notebook. Drawing and object rendering share a world-coordinate system; the Mac companion returns proposed edits that the app validates and applies as one undoable transaction.
 
@@ -28,11 +28,11 @@ Settings are separate from notebooks. Pairing secrets are excluded from JSON and
 
 ## Native UI and drawing
 
-SwiftUI supplies the notebook ribbon, sliding library sidebar, inspector, and categorized Settings screens. UIKit hosts a PencilKit canvas over a Core Graphics object surface. PencilKit handles pressure-sensitive ink, erasing, and native ink selection. Object selection is a separate tool.
+SwiftUI supplies the notebook ribbon, sliding library sidebar, inspector, and categorized Settings screens. UIKit hosts a PencilKit canvas over a Core Graphics object surface. PencilKit handles pressure-sensitive ink and erasing. An original polygon lasso selects handwriting and canvas objects together. The arrow also offers direct object selection and resizing. A mixed clipboard preserves relative positions and PencilKit stroke data; mixed move, duplicate, paste, and delete operations are validated document transactions. Irrelevant native handwriting edit commands such as Insert Space are suppressed.
 
 The camera supports panning, zooming, and expanding content extents. A rebased native ink origin maps negative world coordinates into PencilKit's positive content space. Saved ink, canvas objects, crop exports, and AI references remain in world coordinates. Dragging, resizing, and reference gestures use the same mapping. Magic Pen uses one-finger or Pencil gestures for reference selection and two fingers for navigation. The canvas ignores keyboard safe-area changes so an editor does not rescale the camera.
 
-`ObjectRenderer.swift` draws native shapes, graphs, text, equations, images, and frames. Graph expressions use a dedicated parser, not arbitrary native evaluation. Triangle geometry follows the exposed angles. Optional shape recognition uses geometric heuristics on closed strokes. Long text, graph expressions, and equations open native editor sheets; the inspector shows the selected object's title and declared controls.
+`ObjectRenderer.swift` draws native shapes, graphs, text, equations, images, and frames. Graph expressions use a dedicated parser, not arbitrary native evaluation. Triangle geometry follows the exposed angles. Optional shape recognition fits circles/ellipses and polygons to a single closed stroke. It waits for committed PencilKit stroke data, matches the completed stroke by identity, and replaces only that stroke in the current notebook. Conversion preserves its brush color, width, and orientation. Raw ink is recorded before a separate conversion checkpoint so Undo restores the original stroke. Recognized polygon outlines store normalized vertices and do not show unrelated canonical-triangle angle controls. Long text, graph expressions, and equations open native editor sheets; the inspector shows the selected object's title and declared controls.
 
 `CanvasExporter` uses the Magic Pen rectangle, selected-object bounds, or viewport as its crop. It composites objects and ink into a bounded PNG or one-page PDF. Interactive objects contribute cached static snapshots.
 
@@ -77,7 +77,7 @@ Widgets do not receive filesystem, shell, Python, native-plugin, or backend acce
 
 The Python companion starts its own ephemeral Codex turn. It is independent of the chat used to develop the app. Host execution tools, connected apps, plugins, browser control, hooks, memory, and delegation are disabled for generation. Hosted web search and image generation can remain available to the connected account. Widget source is returned as data and is not executed on the Mac.
 
-Responses contain `message` and `operations` with `add`, `update`, or `delete` types. The companion validates the response, and the native app validates it again before atomic application. Updates and deletions must identify existing objects. Canceled native tasks discard their responses; canceling a request does not guarantee immediate termination of work already running in the Mac runtime.
+Responses contain `message` and `operations` with `add`, `update`, `delete`, or `insertPDF` types. The companion validates the response, and the native app validates it again before atomic application. Updates and deletions must identify existing objects. Canceled native tasks discard their responses; canceling a request does not guarantee immediate termination of work already running in the Mac runtime. Each request captures the selected thinking level independently of later settings changes.
 
 Generated images are accepted only from the generated-image directory belonging to the exact Codex turn identified by its trusted event stream. The companion rejects path escapes, symlinks, invalid signatures, and oversized assets before embedding image bytes.
 
@@ -106,15 +106,21 @@ The prototype uses authenticated HTTP on a trusted local network. Remote hosting
 
 Listening pauses during the agent turn and spoken reply to avoid treating playback as a command. Stopping, backgrounding, interruption, and errors invalidate the current session. The interface can remain hands-free across successful turns, with a visible stop control.
 
+`VoiceTaskSession` separates the listening session from submitted canvas jobs. Leaving Magic Pen or stopping voice detaches speech callbacks without canceling those jobs. Selecting a new reference while thinking or speaking opens a new listening session. A generation identity prevents an older response from speaking over or taking control of the newer session; the older job can still apply its validated canvas edits. Cancellation remains an explicit task-list action.
+
 This is native recognition and synthesis around a text agent. It is not OpenAI realtime audio streaming. The tested runtime rejected subscription-only realtime audio with an API-key requirement; the separate API-backed route is not configured. See [the recorded probe](../bridge/VOICE_NOTES.md).
 
 ## PDF references and extension boundaries
 
-`PDFLibrary` preserves imported PDFs, indexes embedded text, ranks matching excerpts, and rasterizes pages for annotation. Scanned documents without embedded text are not locally OCR-indexed. Agents receive bounded text context rather than unrestricted filesystem access.
+`PDFLibrary` copies original PDF files directly into its library, allowing up to 1 GB without a page-count cap. A background actor owns URL-backed PDFKit documents for import validation, search, and page rasterization; whole PDF bytes are never loaded into a production import buffer. Search scans every page, supports cancellation between pages, keeps only the best 30 matches, and caches up to 16 MiB of extracted page text. Page previews are limited to 1,600 pixels on their longest edge. Scanned documents without embedded text are not locally OCR-indexed. Agents receive at most 10,000 characters of relevant excerpts and document metadata from a captured library list. Ordinary canvas prompts receive only the lightweight document list; full-text retrieval requires reference words such as PDF, question, chapter, or page, or a meaningful document-title word. Explicit library search always searches the text. This keeps large books out of the critical path for unrelated canvas edits.
+
+For page printouts, `insertPDF` operations name a captured document UUID and one-based page, with optional canvas coordinates. Both the companion and native client validate the identifiers and page range; at most four pages can be inserted per response. The native client renders every page before converting the operations to ordinary image additions and applying the entire response atomically. Model output cannot supply a local path. The result is a complete original page ready for annotation; question-level cropping is not automatic.
 
 ## Databricks object catalog
 
 `CloudObjectCatalog` uses authenticated companion endpoints to list, save, and load object snapshots in a configured Databricks Unity Catalog volume. The Mac's external Databricks CLI manages OAuth credentials; the iPad uses only its existing companion pairing token. Each explicit Save creates a unique immutable version with metadata, schema version, object data, and a content checksum. Load validates the object and inserts a fresh local copy. The native UI lives beside the local object catalog.
+
+The catalog presents 16 original starter objects, saved local objects, and cloud versions with search, kind filters, and grid/list layouts. Cloud objects load only after an explicit Preview action, and insertion creates a new instance. A pairing-scoped cache holds at most eight previews and 24 MB. Native thumbnails render known object types; unknown widgets display a placeholder or existing snapshot without executing their code during browsing.
 
 The implementation uses the Databricks Files API, not SQL execution. A fresh checkout has no workspace configuration. The companion does not provision resources on startup, upload notebooks automatically, or provide live collaborative synchronization. Live development validation saved, listed, and loaded an original synthetic object while the SQL warehouse remained stopped. The separately included SQL chart adapter is disabled and not wired to the app. See [Databricks setup and boundaries](../bridge/DATABRICKS.md).
 

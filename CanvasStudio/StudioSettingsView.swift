@@ -142,6 +142,15 @@ struct StudioSettingsView: View {
         Section {
             Toggle("Magic Pen & AI", isOn: $store.settings.aiEnabled)
         } footer: { Text("Tap or select an area to give Magic Pen a place to focus. Then ask it to create or change something.") }
+        Section {
+            Picker("Thinking level", selection: $store.settings.reasoningEffort) {
+                Text("Fast · Low").tag("low")
+                Text("Balanced · Medium").tag("medium")
+                Text("Deep · High").tag("high")
+                Text("Very deep · Extra high").tag("xhigh")
+            }.accessibilityIdentifier("reasoningEffort")
+        } header: { Text("AI response") }
+        footer: { Text("Fast is the default for everyday canvas edits. Higher levels give complex requests more reasoning time and can take longer. This applies to new requests; image generation and web research may still take time.") }
         Section("Conversation") {
             Picker("When holding Magic Pen", selection: $store.settings.voiceMode) {
                 Text("Open voice conversation").tag(true)
@@ -180,7 +189,7 @@ struct StudioSettingsView: View {
             Toggle("Draw with a finger", isOn: $store.settings.drawWithFinger)
             Toggle("Recognize simple shapes", isOn: $store.settings.recognizeShapes)
         } header: { Text("Writing") } footer: {
-            Text("When finger drawing is off, use Apple Pencil to write and your fingers to move the canvas. Shape recognition turns simple closed strokes into editable shapes.")
+            Text("When finger drawing is off, use Apple Pencil to write and your fingers to move the canvas. With shape recognition on, draw a circle, rectangle, or triangle in one continuous stroke and lift your Pencil. Undo restores the original ink.")
         }
     }
 

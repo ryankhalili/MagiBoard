@@ -39,13 +39,17 @@ All endpoints require `Authorization: Bearer <pairing token>` and reject browser
 - `POST /auth/start` with `{}`: `verificationUrl`, `userCode`, `loginId`, `type`, from official Codex `account/login/start` with `chatgptDeviceCode`.
 - `POST /auth/cancel` with `loginId`: cancel pending sign-in.
 - `POST /disconnect` with `{}`: revoke this pairing token and write a new local pairing file.
-- `POST /generate`: `{prompt, objects, reference?, selectedIDs?, imageBase64?, documentText?}`. Returns `{message, operations:[{type,id,object?}]}`. Types are `add`, `update`, `delete`. Use an HTTP timeout of at least 420 seconds.
+- `POST /generate`: `{prompt, objects, reasoningEffort?, reference?, selectedIDs?, imageBase64?, documentText?, documents?}`. Returns `{message, operations:[...]}`. Object operations are `add`, `update`, and `delete`; `insertPDF` carries a document UUID and one-based page number. Use an HTTP timeout of at least 420 seconds.
 - `GET /catalog/status`: whether the separately configured Databricks object catalog is connected.
 - `GET /catalog/objects`: `{objects:[{id,title,kind,createdAt,schemaVersion}],truncated}` for immutable saved versions.
 - `POST /catalog/objects` with `{object}`: explicitly save one validated canvas object; returns `{entry}`.
 - `GET /catalog/objects/{snapshot UUID}`: `{entry,object}`. Native import assigns a new object identity and places it in the current notebook.
 
 A reference contains `x,y,width,height` in canvas coordinates. A small rectangle acts as a waypoint. PNG/JPEG image context is optional; PDF content should be extracted to `documentText` by the native app. Existing image bytes are excluded from the textual object prompt.
+
+`documents` contains only `{id,title,pages}` from the captured local library, never file URLs. A page printout uses `{type:"insertPDF",documentID,page,x?,y?}`. The bridge checks the document and page against that metadata and permits at most four pages in one batch. The iPad resolves all requested pages from its original files into bounded image objects before applying any changes; one invalid page rejects the entire response. Missing coordinates use the captured reference, with multiple pages arranged side by side. This inserts complete source pages, not an automatically cropped individual exercise. Ordinary canvas requests do not scan PDF text; explicit reference language or a document-title word triggers excerpt retrieval.
+
+`reasoningEffort` accepts `low`, `medium`, `high`, or `xhigh`, and defaults to `low` for older clients. The native Thinking level setting sends its value with each request; the bridge passes it through the actual `model_reasoning_effort` Codex configuration option. Higher levels may take longer, and image generation or web searches add their own latency. The installed runtime advertised all four levels for every available model during validation; support may vary with another account or future model. The bridge does not silently override an unsupported choice. [Official configuration reference](https://developers.openai.com/codex/config-reference/).
 
 Canvas objects include `id` (UUID), `kind` (`text`, `shape`, `graph`, `image`, `widget`, `latex`, `frame`), `title`, `x,y,width,height`, `color`, `text`, `properties` (numeric dictionary), `propertySpecs`, `code` (self-contained widget HTML), `shape`, `pattern`. Each property spec declares `key,label,control,min,max,step,unit,choices`; controls are slider, number, toggle, or numeric choice. The parameter must exist and fit its declared bounds. Strict model output uses a JSON-encoded property dictionary internally; the bridge normalizes and validates it before responding.
 

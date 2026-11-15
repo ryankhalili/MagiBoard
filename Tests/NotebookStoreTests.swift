@@ -189,6 +189,49 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(restored, object)
     }
 
+    func testStarterCatalogContainsValidEditableObjectsAndInsertsIndependentCopies() throws {
+        let starters = StarterObjects.all
+        XCTAssertEqual(starters.count, 16)
+        XCTAssertEqual(Set(starters.map(\.id)).count, starters.count)
+        XCTAssertEqual(Set(starters.map { $0.object.id }).count, starters.count)
+        let store = NotebookStore(storageURL: try temporaryDirectory(), loadSaved: false)
+        store.newNotebook(title: "Starter validation")
+        for starter in starters {
+            XCTAssertNoThrow(try NotebookValidation.validate(starter.object), starter.id)
+            let decoded = try JSONDecoder().decode(CanvasObject.self, from: JSONEncoder().encode(starter.object))
+            XCTAssertEqual(decoded, starter.object)
+            if starter.object.kind == "latex" {
+                XCTAssertNil(EquationRenderer.diagnostic(starter.object.text), starter.id)
+            }
+            if starter.object.kind == "graph" {
+                XCTAssertTrue(PlotExpression(starter.object.text).evaluate(x: 1).isFinite, starter.id)
+            }
+            XCTAssertTrue(store.insertFromCatalog(starter.object), starter.id)
+            let inserted = try XCTUnwrap(store.notebook.objects.last)
+            XCTAssertNotEqual(inserted.id, starter.object.id)
+            XCTAssertEqual(inserted.propertySpecs, starter.object.propertySpecs)
+            XCTAssertEqual(inserted.code, starter.object.code)
+        }
+        XCTAssertEqual(store.notebook.objects.count, starters.count)
+        var edited = try XCTUnwrap(store.notebook.objects.first)
+        edited.title = "My edited copy"; store.update(edited)
+        XCTAssertEqual(StarterObjects.all.first?.object.title, "Triangle")
+    }
+
+    func testCatalogPreviewsRenderNativeContentWithoutRunningWidgetCode() throws {
+        for starter in StarterObjects.all {
+            let object = starter.object
+            if object.kind == "widget" {
+                XCTAssertNil(CatalogThumbnailRenderer.image(for: object), "Unrendered widgets use an honest placeholder, never background execution")
+            } else {
+                let image = try XCTUnwrap(CatalogThumbnailRenderer.image(for: object), starter.id)
+                XCTAssertEqual(image.size.width, 360)
+                XCTAssertEqual(image.size.height, 210)
+                XCTAssertNotNil(image.pngData())
+            }
+        }
+    }
+
     func testInvalidDeclaredValueRejectsEntireAgentTransaction() throws {
         let store = NotebookStore(storageURL: try temporaryDirectory(), loadSaved: false)
         let before = store.notebook, selection = store.selectedIDs, couldUndo = store.canUndo

@@ -54,12 +54,13 @@ class ConcurrentGenerationTests(unittest.TestCase):
             bridge = self.make_bridge(folder)
             entered, release = threading.Event(), threading.Event()
             lock = threading.Lock()
-            contexts, directories = [], []
+            contexts, directories, efforts = [], [], []
             def run(command, **kwargs):
                 context = json.loads(kwargs["input"].split("\n\nCanvas request:\n")[1])
                 with lock:
                     contexts.append(context)
                     directories.append(kwargs["cwd"])
+                    efforts.append((context["prompt"], next(value for value in command if value.startswith("model_reasoning_effort="))))
                     if len(contexts) == 4:
                         entered.set()
                 self.assertTrue(release.wait(5))
@@ -68,7 +69,8 @@ class ConcurrentGenerationTests(unittest.TestCase):
                 result = {"message": context["prompt"], "operations": [{"type": "add", "id": ident, "object": obj}]}
                 (kwargs["cwd"] / "response.json").write_text(json.dumps(result))
                 return subprocess.CompletedProcess(command, 0, "", "")
-            requests = [{"prompt": "request " + str(index), "objects": [], "reference": {"x": index * 100}} for index in range(4)]
+            levels = ["low", "medium", "high", "xhigh"]
+            requests = [{"prompt": "request " + str(index), "objects": [], "reference": {"x": index * 100}, "reasoningEffort": levels[index]} for index in range(4)]
             with patch("server.subprocess.run", side_effect=run), concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
                 futures = [pool.submit(bridge.generate, request) for request in requests]
                 try:
@@ -83,7 +85,30 @@ class ConcurrentGenerationTests(unittest.TestCase):
             self.assertEqual([result["operations"][0]["object"]["x"] for result in results], [0, 100, 200, 300])
             self.assertEqual([result["message"] for result in results], ["request " + str(index) for index in range(4)])
             self.assertEqual(len(set(directories)), 4)
+            self.assertEqual(dict(efforts), {"request " + str(index): f'model_reasoning_effort="{level}"' for index, level in enumerate(levels)})
             self.assertEqual(bridge.busy.active, 0)
+
+    def test_missing_effort_uses_real_low_cli_override(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bridge = self.make_bridge(folder)
+            def run(command, **kwargs):
+                overrides = [command[index + 1] for index, value in enumerate(command[:-1]) if value == "-c"]
+                self.assertEqual([value for value in overrides if value.startswith("model_reasoning_effort=")], ['model_reasoning_effort="low"'])
+                (kwargs["cwd"] / "response.json").write_text(json.dumps({"message": "Done", "operations": []}))
+                return subprocess.CompletedProcess(command, 0, "", "")
+            with patch("server.subprocess.run", side_effect=run) as execute:
+                bridge.generate({"prompt": "test", "objects": []})
+                execute.assert_called_once()
+
+    def test_invalid_effort_rejected_before_running_codex(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bridge = self.make_bridge(folder)
+            for value in (None, 1, [], "", "HIGH", "ultra", 'low"\n[shell_environment_policy]\ninherit="all'):
+                with self.subTest(value=value), patch("server.subprocess.run") as execute:
+                    with self.assertRaisesRegex(BridgeError, "thinking level"):
+                        bridge.generate({"prompt": "test", "objects": [], "reasoningEffort": value})
+                    execute.assert_not_called()
+                    self.assertEqual(bridge.busy.active, 0)
 
     def test_timeout_releases_slot(self):
         with tempfile.TemporaryDirectory() as folder:

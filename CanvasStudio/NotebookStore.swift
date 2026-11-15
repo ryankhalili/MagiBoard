@@ -2,11 +2,18 @@ import Foundation
 import SwiftUI
 import UIKit
 import Security
+import PencilKit
 
 @MainActor
 final class NotebookStore: ObservableObject {
-    @Published var notebook: Notebook { didSet { if !isLoading { scheduleSave() } } }
+    @Published var notebook: Notebook { didSet {
+        if !preservingInkSelection && (notebook.id != oldValue.id || notebook.drawingData != oldValue.drawingData) {
+            inkRevision &+= 1; selectedStrokeIndices = []
+        }
+        if !isLoading { scheduleSave() }
+    } }
     @Published var selectedIDs: Set<UUID> = []
+    @Published var selectedStrokeIndices: Set<Int> = []
     @Published var tool: CanvasTool = .pen
     @Published var colorHex: String = "#243449"
     @Published var lineWidth: Double = 3
@@ -23,7 +30,11 @@ final class NotebookStore: ObservableObject {
     private var undoStack: [Notebook] = []
     private var redoStack: [Notebook] = []
     private var pendingCheckpoint: Notebook?
-    private var clipboard: [CanvasObject] = []
+    private var clipboard: CanvasSelectionPayload?
+    private var preservingInkSelection = false
+    private var inkRevision: UInt64 = 0
+    private var cachedInkData = Data()
+    private var cachedInk = PKDrawing()
     private var saveTask: Task<Void, Never>?
     private var isLoading = true
     private let directory: URL
@@ -31,7 +42,27 @@ final class NotebookStore: ObservableObject {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let clipboardType = "org.madhacks.canvasstudio.objects"
+    private let mixedClipboardType = "org.madhacks.canvasstudio.selection.v1"
     var selectedObjects: [CanvasObject] { notebook.objects.filter { selectedIDs.contains($0.id) } }
+    var worldInk: PKDrawing {
+        if cachedInkData != notebook.drawingData {
+            cachedInkData = notebook.drawingData
+            cachedInk = (try? PKDrawing(data: notebook.drawingData)) ?? PKDrawing()
+        }
+        return cachedInk
+    }
+    var hasSelection: Bool { !selectedObjects.isEmpty || selectedStrokeIndices.contains(where: worldInk.strokes.indices.contains) }
+    var selectionBounds: CGRect? {
+        var rect = selectedObjects.map(\.rect).reduce(CGRect.null) { $0.union($1) }
+        for index in selectedStrokeIndices where worldInk.strokes.indices.contains(index) { rect = rect.union(worldInk.strokes[index].renderBounds) }
+        return rect.isNull ? nil : rect
+    }
+    func clearSelection() { selectedIDs = []; selectedStrokeIndices = [] }
+    func setSelection(objects: Set<UUID>, strokes: Set<Int>) {
+        selectedIDs = objects.intersection(Set(notebook.objects.map(\.id)))
+        selectedStrokeIndices = strokes.filter { worldInk.strokes.indices.contains($0) }
+    }
+    func selectAll() { setSelection(objects: Set(notebook.objects.map(\.id)), strokes: Set(worldInk.strokes.indices)) }
 
     init(storageURL: URL? = nil, loadSaved: Bool = true) {
         usesSharedKeychain = storageURL == nil
@@ -88,7 +119,7 @@ final class NotebookStore: ObservableObject {
             guard notebook.objects.count < 2000 else { throw NotebookError.invalid("This notebook has reached the prototype’s object limit.") }
             var item = object
             if notebook.objects.contains(where: { $0.id == item.id }) { item.id = UUID() }
-            mutate { $0.objects.append(item) }; selectedIDs = [item.id]
+            mutate { $0.objects.append(item) }; selectedIDs = [item.id]; selectedStrokeIndices = []
         } catch { status = error.localizedDescription }
     }
     func update(_ object: CanvasObject) {
@@ -98,43 +129,137 @@ final class NotebookStore: ObservableObject {
             mutate { $0.objects[i] = object }
         } catch { status = error.localizedDescription }
     }
+    func selectionSnapshot() -> CanvasSelectionSnapshot {
+        CanvasSelectionSnapshot(notebookID: notebook.id, objects: selectedObjects, drawing: worldInk, drawingData: notebook.drawingData, strokeIndices: selectedStrokeIndices, inkRevision: inkRevision)
+    }
+    /// During a drag, transform from its captured starting state, never cumulatively.
+    @discardableResult
+    func moveSelection(from snapshot: CanvasSelectionSnapshot, by delta: CGPoint) -> Bool {
+        guard snapshot.notebookID == notebook.id, delta.x.isFinite, delta.y.isFinite,
+              snapshot.strokeIndices.isEmpty || snapshot.inkRevision == inkRevision,
+              snapshot.expectedObjects.allSatisfy({ id, expected in notebook.objects.first { $0.id == id } == expected }) else { return false }
+        var proposed = notebook
+        for original in snapshot.objects {
+            guard let index = proposed.objects.firstIndex(where: { $0.id == original.id }) else { continue }
+            var object = original; object.x += delta.x; object.y += delta.y
+            proposed.objects[index] = object
+        }
+        if !snapshot.strokeIndices.isEmpty {
+            let strokes = snapshot.drawing.strokes.enumerated().map { index, stroke in
+                snapshot.strokeIndices.contains(index) ? PKDrawing(strokes: [stroke]).transformed(using: CGAffineTransform(translationX: delta.x, y: delta.y)).strokes[0] : stroke
+            }
+            proposed.drawingData = PKDrawing(strokes: strokes).dataRepresentation()
+        }
+        guard (try? NotebookValidation.validate(proposed)) != nil,
+              snapshot.strokeIndices.isEmpty || Self.validInk((try? PKDrawing(data: proposed.drawingData)) ?? PKDrawing()) else { return false }
+        preservingInkSelection = true
+        mutate { $0 = proposed }
+        preservingInkSelection = false
+        snapshot.expectedObjects = Dictionary(uniqueKeysWithValues: proposed.objects.filter { snapshot.expectedObjects[$0.id] != nil }.map { ($0.id, $0) })
+        return true
+    }
+    @discardableResult
+    func cancelSelectionMove(_ snapshot: CanvasSelectionSnapshot) -> Bool {
+        guard snapshot.notebookID == notebook.id else { return false }
+        var proposed = notebook
+        for original in snapshot.objects {
+            if let index = proposed.objects.firstIndex(where: { $0.id == original.id }), proposed.objects[index] == snapshot.expectedObjects[original.id] {
+                proposed.objects[index] = original
+            }
+        }
+        if !snapshot.strokeIndices.isEmpty && snapshot.inkRevision == inkRevision { proposed.drawingData = snapshot.drawingData }
+        preservingInkSelection = true; mutate { $0 = proposed }; preservingInkSelection = false
+        if snapshot.inkRevision != inkRevision { selectedStrokeIndices = [] }
+        return snapshot.inkRevision == inkRevision
+    }
+    private static func validInk(_ drawing: PKDrawing) -> Bool {
+        guard drawing.strokes.count <= 100_000 else { return false }
+        for stroke in drawing.strokes {
+            let rect = stroke.renderBounds, t = stroke.transform
+            guard [rect.minX, rect.minY, rect.maxX, rect.maxY, t.a, t.b, t.c, t.d, t.tx, t.ty].allSatisfy({ $0.isFinite && abs($0) <= 10_000_000 }) else { return false }
+        }
+        return true
+    }
     func deleteSelection() {
-        guard !selectedIDs.isEmpty else { return }
-        let ids = selectedIDs
-        mutate { $0.objects.removeAll { ids.contains($0.id) } }
-        selectedIDs = []
+        guard hasSelection else { return }
+        let ids = selectedIDs, indices = selectedStrokeIndices
+        let drawing = PKDrawing(strokes: worldInk.strokes.enumerated().filter { !indices.contains($0.offset) }.map(\.element))
+        mutate {
+            $0.objects.removeAll { ids.contains($0.id) }
+            if !indices.isEmpty { $0.drawingData = drawing.dataRepresentation() }
+        }
+        clearSelection()
     }
     func duplicateSelection() {
-        let copies = selectedObjects.map { item -> CanvasObject in
-            var copy = item; copy.id = UUID(); copy.x += 28; copy.y += 28; return copy
+        guard let bounds = selectionBounds, let payload = selectionPayload() else { return }
+        _ = pasteSelection(payload, at: CGPoint(x: bounds.minX + 28, y: bounds.minY + 28))
+    }
+    func selectionPayload() -> CanvasSelectionPayload? {
+        guard let bounds = selectionBounds else { return nil }
+        let transform = CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY)
+        let objects = selectedObjects.map { original -> CanvasObject in
+            var copy = original; copy.x -= bounds.minX; copy.y -= bounds.minY; return copy
         }
-        guard !copies.isEmpty, notebook.objects.count + copies.count <= 2000 else { return }
-        mutate { $0.objects.append(contentsOf: copies) }; selectedIDs = Set(copies.map(\.id))
+        let strokes = worldInk.strokes.enumerated().filter { selectedStrokeIndices.contains($0.offset) }.map(\.element)
+        let ink = PKDrawing(strokes: strokes).transformed(using: transform)
+        return CanvasSelectionPayload(objects: objects, drawingData: ink.dataRepresentation(), bounds: CanvasRect(x: 0, y: 0, width: bounds.width, height: bounds.height))
     }
     func copySelection() {
-        clipboard = selectedObjects
-        guard !clipboard.isEmpty else { return }
-        if let data = try? encoder.encode(clipboard) { UIPasteboard.general.setData(data, forPasteboardType: clipboardType) }
-        status = "Copied \(clipboard.count) object\(clipboard.count == 1 ? "" : "s")"
+        guard let payload = selectionPayload(), let data = try? encoder.encode(payload), data.count <= 40_000_000 else { return }
+        clipboard = payload
+        var item: [String: Any] = [mixedClipboardType: data]
+        if !payload.objects.isEmpty, let objects = try? encoder.encode(payload.objects) { item[clipboardType] = objects }
+        UIPasteboard.general.items = [item]
+        status = "Copied selection"
+    }
+    @discardableResult
+    func pasteSelection(_ payload: CanvasSelectionPayload, at point: CGPoint) -> Bool {
+        do {
+            guard payload.version == 1, payload.objects.count <= 2000, payload.drawingData.count <= 40_000_000,
+                  point.x.isFinite, point.y.isFinite, abs(point.x) <= 10_000_000, abs(point.y) <= 10_000_000 else {
+                throw NotebookError.invalid("The copied selection is too large or has an invalid position.")
+            }
+            let source = try PKDrawing(data: payload.drawingData)
+            guard Self.validInk(source) else { throw NotebookError.invalid("The copied ink has invalid coordinates.") }
+            guard !source.strokes.isEmpty || !payload.objects.isEmpty else { return false }
+            guard source.strokes.count + worldInk.strokes.count <= 100_000 else { throw NotebookError.invalid("This selection contains too many ink strokes.") }
+            let incoming = source.transformed(using: CGAffineTransform(translationX: point.x, y: point.y))
+            guard Self.validInk(incoming) else { throw NotebookError.invalid("The pasted ink would lie outside the canvas coordinate limits.") }
+            let objects = payload.objects.map { original -> CanvasObject in
+                var copy = original; copy.id = UUID(); copy.x += point.x; copy.y += point.y; return copy
+            }
+            var proposed = notebook
+            proposed.objects.append(contentsOf: objects)
+            let firstStroke = worldInk.strokes.count
+            if !incoming.strokes.isEmpty { proposed.drawingData = PKDrawing(strokes: worldInk.strokes + incoming.strokes).dataRepresentation() }
+            try NotebookValidation.validate(proposed)
+            mutate { $0 = proposed }
+            setSelection(objects: Set(objects.map(\.id)), strokes: Set(firstStroke..<(firstStroke + incoming.strokes.count)))
+            status = "Pasted selection"
+            return true
+        } catch { status = "Could not paste: \(error.localizedDescription)"; return false }
     }
     func paste() {
-        if let data = UIPasteboard.general.data(forPasteboardType: clipboardType), data.count <= 30_000_000,
-           let objects = try? decoder.decode([CanvasObject].self, from: data), objects.count <= 2000,
-           objects.allSatisfy({ (try? NotebookValidation.validate($0)) != nil }) { clipboard = objects }
-        else if let image = UIPasteboard.general.image, let data = image.pngData() {
-            let width = min(Double(image.size.width), 500)
-            add(CanvasObject(kind: "image", title: "Pasted image", x: viewport.x + 100, y: viewport.y + 100,
-                             width: width, height: width * Double(image.size.height / max(image.size.width, 1)), imageData: data)); return
+        if let data = UIPasteboard.general.data(forPasteboardType: mixedClipboardType) {
+            guard data.count <= 40_000_000, let payload = try? decoder.decode(CanvasSelectionPayload.self, from: data) else { status = "Could not read the copied selection"; return }
+            clipboard = payload
+        } else if let data = UIPasteboard.general.data(forPasteboardType: clipboardType) {
+            guard data.count <= 30_000_000, let objects = try? decoder.decode([CanvasObject].self, from: data), objects.count <= 2000,
+                  objects.allSatisfy({ (try? NotebookValidation.validate($0)) != nil }) else { status = "Could not read copied objects"; return }
+            let bounds = objects.map(\.rect).reduce(CGRect.null) { $0.union($1) }
+            guard !bounds.isNull else { return }
+            let normalized = objects.map { original -> CanvasObject in var copy = original; copy.x -= bounds.minX; copy.y -= bounds.minY; return copy }
+            clipboard = CanvasSelectionPayload(objects: normalized, drawingData: PKDrawing().dataRepresentation(), bounds: CanvasRect(CGRect(origin: .zero, size: bounds.size)))
+        } else if let image = UIPasteboard.general.image, let data = image.pngData() {
+            do { add(try CanvasImageImport.object(from: data, title: "Pasted image", viewport: viewport)) }
+            catch { status = error.localizedDescription }
+            return
         } else if let text = UIPasteboard.general.string, !text.isEmpty {
-            add(CanvasObject(kind: "text", title: "Pasted text", x: viewport.x + 100, y: viewport.y + 100,
+            add(CanvasObject(kind: "text", title: "Pasted text", x: viewport.x + 120, y: viewport.y + 180,
                              width: 360, height: 180, color: colorHex, text: text, properties: ["fontSize": 20])); return
         }
-        guard !clipboard.isEmpty, notebook.objects.count + clipboard.count <= 2000 else { return }
-        let minX = clipboard.map(\.x).min() ?? 0, minY = clipboard.map(\.y).min() ?? 0
-        let copies = clipboard.map { item -> CanvasObject in
-            var copy = item; copy.id = UUID(); copy.x += viewport.x + 120 - minX; copy.y += viewport.y + 120 - minY; return copy
-        }
-        mutate { $0.objects.append(contentsOf: copies) }; selectedIDs = Set(copies.map(\.id))
+        guard let clipboard else { return }
+        _ = pasteSelection(clipboard, at: CGPoint(x: viewport.x + 120, y: viewport.y + 180))
     }
     func setDrawing(_ data: Data) {
         guard data != notebook.drawingData else { return }
@@ -143,12 +268,12 @@ final class NotebookStore: ObservableObject {
     func undo() {
         commit()
         guard let previous = undoStack.popLast() else { return }
-        redoStack.append(notebook); notebook = previous; selectedIDs = []
+        redoStack.append(notebook); notebook = previous; clearSelection()
         updateHistoryState()
     }
     func redo() {
         guard let next = redoStack.popLast() else { return }
-        undoStack.append(notebook); notebook = next; selectedIDs = []
+        undoStack.append(notebook); notebook = next; clearSelection()
         updateHistoryState()
     }
     private func updateHistoryState() { canUndo = !undoStack.isEmpty; canRedo = !redoStack.isEmpty }
@@ -176,7 +301,7 @@ final class NotebookStore: ObservableObject {
         try NotebookValidation.validate(proposed)
         guard proposed != notebook else { status = response.message; return }
         mutate { $0 = proposed }
-        if selectResults { selectedIDs = Set(response.operations.compactMap { $0.type == "delete" ? nil : ($0.id ?? $0.object?.id) }) }
+        if selectResults { selectedIDs = Set(response.operations.compactMap { $0.type == "delete" ? nil : ($0.id ?? $0.object?.id) }); selectedStrokeIndices = [] }
         else { selectedIDs.formIntersection(Set(notebook.objects.map(\.id))) }
         status = response.message
     }
@@ -204,7 +329,7 @@ final class NotebookStore: ObservableObject {
 
     func newNotebook(title: String = "Untitled notebook") {
         guard save() else { return }
-        saveTask?.cancel(); clearHistory(); selectedIDs = []; reference = nil
+        saveTask?.cancel(); clearHistory(); clearSelection(); reference = nil
         notebook = Notebook(title: title); save()
     }
     func openNotebook(id: UUID) {
@@ -212,7 +337,7 @@ final class NotebookStore: ObservableObject {
         guard save() else { return }
         do {
             let loaded = try readNotebook(at: fileURL(id))
-            clearHistory(); selectedIDs = []; reference = nil; notebook = loaded; save()
+            clearHistory(); clearSelection(); reference = nil; notebook = loaded; save()
         } catch { status = error.localizedDescription }
     }
     func load(url: URL) {
@@ -223,7 +348,7 @@ final class NotebookStore: ObservableObject {
             // Import a distinct notebook so a shared document can never overwrite local work.
             loaded.id = UUID(); loaded.updatedAt = Date()
             guard save() else { return }
-            clearHistory(); selectedIDs = []; reference = nil; notebook = loaded; save()
+            clearHistory(); clearSelection(); reference = nil; notebook = loaded; save()
             status = "Imported \(loaded.title)"
         } catch { status = "Could not import: \(error.localizedDescription)" }
     }

@@ -16,7 +16,7 @@ The signed v0.3 build is installed and launched on the connected iPad, preservin
 
 The verified companion/catalog checkpoint was pushed as `5589507`, followed by the native v0.3 release checkpoint. Actual subscription-backed concurrent generation, equation transcription, authenticated cloud save/list/load, and unauthorized-request rejection were checked. Only a synthetic demo object was uploaded during validation; no SQL warehouse was started.
 
-## In progress — v0.3.1 physical-device feedback
+## Shipped — v0.3.1 physical-device feedback
 
 - Repair shape recognition timing so completing a shape never removes the following stroke. Improve circles, rectangles, and triangles while retaining drawing orientation.
 - Replace the confusing native Insert Space menu with visible mixed ink/object selection actions. Extend lasso selection to handwriting and objects together.
@@ -25,8 +25,9 @@ The verified companion/catalog checkpoint was pushed as `5589507`, followed by t
 - Expose the actual per-request thinking level (the existing default was already low).
 - Align the bottom controls, remove idle tool-description text, and make selected page regions draggable.
 - Remove the 300-page PDF cutoff, move large-book operations off the UI thread, and verify search/printout beyond page 300.
+- Defer native ink replacement, origin rebasing, and recognition during pinch settlement to avoid transient stroke movement. Disable elastic zoom overshoot.
 
-The shape suite passed all 20 checks; mixed selection passed 10 unit checks plus ink/object clipboard UI checks. Broader integration and the new PDF/catalog checks remain in progress before the next install and release.
+The signed v0.3.1 build was installed and launched on the connected iPad. All 70 native unit tests and 65 Python companion tests passed. Targeted UI checks passed for mixed ink/object clipboard actions, catalog search/filter/preview/insertion, aligned bottom controls, handwriting, hand/finger panning, and Magic Pen reference retention through zoom and tool changes. Native PDF checks imported a 400-page document and inserted page 350; a live subscription-backed request also returned the correct validated page-350 printout operation. See the validation record for exact scope and remaining physical-device checks.
 
 ## Shipped — v0.2
 

@@ -151,7 +151,7 @@ enum CanvasTool: String, CaseIterable, Codable, Identifiable {
         case .pencil: return "Pencil"
         case .highlighter: return "Highlighter"
         case .eraser: return "Eraser"
-        case .lasso: return "Ink lasso"
+        case .lasso: return "Lasso"
         case .select: return "Select objects"
         case .hand: return "Move canvas"
         case .magic: return "Magic Pen"
@@ -173,6 +173,7 @@ enum CanvasTool: String, CaseIterable, Codable, Identifiable {
 
 struct StudioSettings: Codable, Equatable {
     var aiEnabled = true
+    var reasoningEffort = "low"
     var darkMode = false
     var drawWithFinger = false
     var recognizeShapes = false
@@ -188,12 +189,14 @@ struct StudioSettings: Codable, Equatable {
     var bridgeToken = ""
     // The pairing secret lives in Keychain, never in notebook or settings JSON.
     enum CodingKeys: String, CodingKey {
-        case aiEnabled, darkMode, drawWithFinger, recognizeShapes, showGrid, paperStyle, toolbarCollapsed, compactHeader, magicOnboardingSeen, voiceMode, spokenReplies, speechLocale, bridgeURL
+        case aiEnabled, reasoningEffort, darkMode, drawWithFinger, recognizeShapes, showGrid, paperStyle, toolbarCollapsed, compactHeader, magicOnboardingSeen, voiceMode, spokenReplies, speechLocale, bridgeURL
     }
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         aiEnabled = try c.decodeIfPresent(Bool.self, forKey: .aiEnabled) ?? true
+        let savedEffort = try c.decodeIfPresent(String.self, forKey: .reasoningEffort) ?? "low"
+        reasoningEffort = ["low", "medium", "high", "xhigh"].contains(savedEffort) ? savedEffort : "low"
         darkMode = try c.decodeIfPresent(Bool.self, forKey: .darkMode) ?? false
         drawWithFinger = try c.decodeIfPresent(Bool.self, forKey: .drawWithFinger) ?? false
         recognizeShapes = try c.decodeIfPresent(Bool.self, forKey: .recognizeShapes) ?? false
@@ -213,8 +216,13 @@ struct AgentOperation: Codable, Equatable {
     var type: String
     var id: UUID?
     var object: CanvasObject?
-    init(type: String, id: UUID? = nil, object: CanvasObject? = nil) {
+    var documentID: UUID?
+    var page: Int?
+    var x: Double?
+    var y: Double?
+    init(type: String, id: UUID? = nil, object: CanvasObject? = nil, documentID: UUID? = nil, page: Int? = nil, x: Double? = nil, y: Double? = nil) {
         self.type = type; self.id = id; self.object = object
+        self.documentID = documentID; self.page = page; self.x = x; self.y = y
     }
 }
 struct AgentResponse: Codable, Equatable {
