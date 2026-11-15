@@ -74,7 +74,7 @@ final class PDFLibrary: ObservableObject {
         guard Self.shouldSearchReferences(query: query, documents: source) else {
             return String(("LOCAL PDF LIBRARY\nDOCUMENTS\n" + catalog).prefix(10_000))
         }
-        let matches = await search(query: query, documents: source)
+        let matches = (try? await worker.contextualExcerpts(query: query, documents: source)) ?? []
         guard !Task.isCancelled else { return "" }
         let excerpts = matches.prefix(8).map { "SOURCE: \($0.title), page \($0.page), documentID \($0.documentID.uuidString)\n\($0.excerpt)" }.joined(separator: "\n\n")
         return String(("LOCAL PDF LIBRARY\n" + excerpts + "\n\nDOCUMENTS\n" + catalog).prefix(10_000))
@@ -166,6 +166,86 @@ private actor PDFLibraryWorker {
         }
     }
 
+    func contextualExcerpts(query: String, documents: [LibraryPDF]) throws -> [PDFSearchResult] {
+        func number(_ pattern: String, in text: String) -> Int? {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let range = Range(match.range(at: 1), in: text) else { return nil }
+            return Int(text[range])
+        }
+        guard let chapter = number(#"\b(?:chapter|ch\.?)\s*(\d+)\b"#, in: query),
+              let problem = number(#"\b(?:question|problem|exercise)\s*(?:number\s*|no\.?\s*|#\s*)?(\d+)\b"#, in: query) else {
+            return try search(query: query, documents: documents)
+        }
+        let queryWords = Set(query.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init))
+        let named = documents.filter { item in
+            item.title.lowercased().split(whereSeparator: { !$0.isLetter }).contains { $0.count >= 4 && queryWords.contains(String($0)) && !["book", "chapter", "exercises", "problems"].contains(String($0)) }
+        }
+        for item in named.isEmpty ? documents : named {
+            try Task.checkCancellation()
+            guard let pdf = PDFDocument(url: item.url), !pdf.isLocked else { continue }
+            var outline: [(label: String, page: Int)] = []
+            func visit(_ node: PDFOutline, depth: Int) {
+                guard depth < 8, outline.count < 2000 else { return }
+                if let page = node.destination?.page {
+                    let index = pdf.index(for: page)
+                    if index != NSNotFound { outline.append((node.label ?? "", index)) }
+                }
+                for index in 0..<node.numberOfChildren { if let child = node.child(at: index) { visit(child, depth: depth + 1) } }
+            }
+            if let root = pdf.outlineRoot { visit(root, depth: 0) }
+            var chapters = outline.compactMap { entry -> (number: Int, page: Int)? in
+                guard let value = number(#"^\s*(?:chapter\s+)?(\d+)(?:\s*[-:–—]\s*|\s+)(?!\d)"#, in: entry.label) else { return nil }
+                return (value, entry.page)
+            }
+            var evidence = "PDF outline"
+            if !chapters.contains(where: { $0.number == chapter }) {
+                evidence = "chapter heading text"
+                for page in 0..<pdf.pageCount {
+                    try Task.checkCancellation()
+                    let heading = String(text(of: pdf, item: item, pageIndex: page).prefix(500))
+                    guard !heading.lowercased().contains("contents"),
+                          let value = number(#"(?m)^\s*chapter\s+(\d+)\b"#, in: heading) else { continue }
+                    if !chapters.contains(where: { $0.number == value }) { chapters.append((value, page)) }
+                }
+            }
+            guard let start = chapters.filter({ $0.number == chapter }).map(\.page).min() else { continue }
+            let end = chapters.filter { $0.number > chapter && $0.page > start }.map(\.page).min() ?? pdf.pageCount
+            let sectionPattern = #"(?im)^\s*(?:problems|exercises|questions)\b"#
+            var problemStart = outline.filter { $0.page >= start && $0.page < end && $0.label.range(of: #"(?i)\b(?:problems|exercises|questions)\b"#, options: .regularExpression) != nil }.map(\.page).min()
+            if problemStart == nil {
+                for page in start..<end {
+                    try Task.checkCancellation()
+                    if text(of: pdf, item: item, pageIndex: page).range(of: sectionPattern, options: .regularExpression) != nil { problemStart = page; break }
+                }
+            }
+            let first = problemStart ?? start
+            let labelPattern = "(?im)(?<![0-9.])\(chapter)\\.\(problem)(?![0-9.])|^\\s*(?:(?:problem|question|exercise)\\s+)?\(problem)[.)：:]\\s"
+            var target: Int?
+            for page in first..<end {
+                try Task.checkCancellation()
+                if text(of: pdf, item: item, pageIndex: page).range(of: labelPattern, options: .regularExpression) != nil { target = page; break }
+            }
+            guard let primary = target ?? problemStart else { continue }
+            var pages = [primary]
+            if primary + 1 < end { pages.append(primary + 1) }
+            if primary > first { pages.append(primary - 1) }
+            if !pages.contains(start) { pages.append(start) }
+            return pages.enumerated().map { order, page in
+                let original = text(of: pdf, item: item, pageIndex: page)
+                let hit = page == primary ? original.range(of: labelPattern, options: .regularExpression)?.lowerBound : nil
+                let beginning = hit.map { original.index($0, offsetBy: -180, limitedBy: original.startIndex) ?? original.startIndex } ?? original.startIndex
+                let limit = order == 0 ? 2800 : (page == start ? 600 : 1800)
+                let ending = original.index(beginning, offsetBy: limit, limitedBy: original.endIndex) ?? original.endIndex
+                let note = "RETRIEVAL CONTEXT: Chapter \(chapter) spans PDF pages \(start + 1)–\(end) according to \(evidence). "
+                    + (problemStart.map { "Its Problems/Exercises section starts on PDF page \($0 + 1). " } ?? "The exercise section was not separately identified. ")
+                    + "Requested exercise \(problem) may be labeled \(chapter).\(problem) or \(problem).; use the source text below to verify.\n"
+                return PDFSearchResult(title: item.title, page: page + 1, excerpt: note + String(original[beginning..<ending]), documentID: item.id)
+            }
+        }
+        return try search(query: query, documents: documents)
+    }
+
     func search(query: String, documents: [LibraryPDF]) throws -> [PDFSearchResult] {
         try Task.checkCancellation()
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -186,7 +266,7 @@ private actor PDFLibraryWorker {
             for pageIndex in 0..<pdf.pageCount {
                 try Task.checkCancellation()
                 let result: Ranked? = autoreleasepool {
-                    let original = text(of: pdf, item: item, pageIndex: pageIndex)
+                    let original = text(of: pdf, item: item, pageIndex: pageIndex).replacingOccurrences(of: "\n", with: " ")
                     let lower = original.lowercased(), title = item.title.lowercased()
                     let pageTerms = terms.filter { lower.contains($0) }
                     let matchedTerms = terms.filter { lower.contains($0) || title.contains($0) }
@@ -213,7 +293,7 @@ private actor PDFLibraryWorker {
     private func text(of pdf: PDFDocument, item: LibraryPDF, pageIndex: Int) -> String {
         let key = "\(item.id.uuidString):\(pageIndex)" as NSString
         if let cached = textCache.object(forKey: key) { return cached as String }
-        let text = (pdf.page(at: pageIndex)?.string ?? "").replacingOccurrences(of: "\n", with: " ")
+        let text = pdf.page(at: pageIndex)?.string ?? ""
         let cost = text.utf16.count * 2
         if cost <= 256 * 1024 { textCache.setObject(text as NSString, forKey: key, cost: cost) }
         return text

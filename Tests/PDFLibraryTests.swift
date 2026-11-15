@@ -137,4 +137,47 @@ final class PDFLibraryTests: XCTestCase {
         XCTAssertFalse(library.isImporting); XCTAssertTrue(library.documents.isEmpty)
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(at: libraryURL, includingPropertiesForKeys: nil).isEmpty)
     }
+
+    func testChapterLookupFindsNumberedProblemUnderSeparateOutlineSection() async throws {
+        let root = try directory(), source = root.appendingPathComponent("Original mechanics.pdf")
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 612, height: 792))
+        try renderer.writePDF(to: source) { context in
+            for page in 1...12 {
+                context.beginPage()
+                let text: String
+                switch page {
+                case 3: text = "Chapter 2\nQuantum Dynamics"
+                case 8: text = "Problems\n1. Describe an original spin experiment."
+                case 9: text = "2. Calculate the sapphire oscillator frequency."
+                case 10: text = "The second problem continues here with its diagram."
+                case 11: text = "Chapter 3\nAngular Momentum"
+                default: text = "General discussion page \(page)."
+                }
+                (text as NSString).draw(in: CGRect(x: 30, y: 40, width: 550, height: 700), withAttributes: [.font: UIFont.systemFont(ofSize: 18)])
+            }
+        }
+        let pdf = try XCTUnwrap(PDFDocument(url: source)), outline = PDFOutline()
+        let chapter = PDFOutline(); chapter.label = "2 - Quantum Dynamics"; chapter.destination = PDFDestination(page: try XCTUnwrap(pdf.page(at: 2)), at: .zero)
+        let problems = PDFOutline(); problems.label = "Problems"; problems.destination = PDFDestination(page: try XCTUnwrap(pdf.page(at: 7)), at: .zero)
+        chapter.insertChild(problems, at: 0); outline.insertChild(chapter, at: 0)
+        let next = PDFOutline(); next.label = "3 - Angular Momentum"; next.destination = PDFDestination(page: try XCTUnwrap(pdf.page(at: 10)), at: .zero)
+        outline.insertChild(next, at: 1); pdf.outlineRoot = outline
+        XCTAssertTrue(pdf.write(to: source))
+        let library = PDFLibrary(directory: root.appendingPathComponent("Library"))
+        try await library.importDocument(url: source)
+        let context = await library.textContext(query: "Find chapter 2 question 2 and print it here")
+        XCTAssertTrue(context.contains("page 9,"), context)
+        XCTAssertTrue(context.contains("sapphire oscillator frequency"))
+        XCTAssertTrue(context.contains("second problem continues"))
+        XCTAssertTrue(context.contains("Problems/Exercises section starts on PDF page 8"))
+        XCTAssertTrue(context.contains("Chapter 2 spans PDF pages 3–10"))
+        XCTAssertLessThanOrEqual(context.count, 10_000)
+        pdf.outlineRoot = nil
+        let unbookmarked = root.appendingPathComponent("Unbookmarked mechanics.pdf")
+        XCTAssertTrue(pdf.write(to: unbookmarked))
+        let fallbackLibrary = PDFLibrary(directory: root.appendingPathComponent("Fallback"))
+        try await fallbackLibrary.importDocument(url: unbookmarked)
+        let fallback = await fallbackLibrary.textContext(query: "Find chapter 2 exercise 2")
+        XCTAssertTrue(fallback.contains("page 9,")); XCTAssertTrue(fallback.contains("sapphire oscillator frequency"))
+    }
 }

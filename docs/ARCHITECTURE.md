@@ -116,6 +116,8 @@ This is native recognition and synthesis around a text agent. It is not OpenAI r
 
 For page printouts, `insertPDF` operations name a captured document UUID and one-based page, with optional canvas coordinates. Both the companion and native client validate the identifiers and page range; at most four pages can be inserted per response. The native client renders every page before converting the operations to ordinary image additions and applying the entire response atomically. Model output cannot supply a local path. The result is a complete original page ready for annotation; question-level cropping is not automatic.
 
+Chapter-and-exercise requests first inspect the PDF outline for chapter boundaries and Problems/Exercises sections, with chapter-heading text as a fallback. Numbered labels such as `2.2` or `2.` identify candidates within that section. Bounded neighboring-page excerpts preserve continuation text, and retrieval evidence identifies PDF file pages separately from printed book labels. This handles book structure without sending the complete textbook to the agent; scanned pages still need a text layer.
+
 ## Databricks object catalog
 
 `CloudObjectCatalog` uses authenticated companion endpoints to list, save, and load object snapshots in a configured Databricks Unity Catalog volume. The Mac's external Databricks CLI manages OAuth credentials; the iPad uses only its existing companion pairing token. Each explicit Save creates a unique immutable version with metadata, schema version, object data, and a content checksum. Load validates the object and inserts a fresh local copy. The native UI lives beside the local object catalog.

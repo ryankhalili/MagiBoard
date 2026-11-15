@@ -11,7 +11,7 @@ A native iPad whiteboard for handwriting, interactive objects, and an AI assista
 - Build interactive HTML objects with sliders, number fields, switches, and choices. While **Interact** is enabled, an object can create, duplicate, or update real canvas objects through a bounded document API—for example, a coin that duplicates onto the whiteboard.
 - Focus Magic Pen on a point or rectangle and type a request. Up to four tasks can run while you keep writing or move elsewhere; each keeps its original reference and appears in the task list. Leaving Magic Pen does not cancel submitted work. In voice mode, speak a request, hear the reply, and continue hands-free; selecting a new reference lets you start another request while previous work continues.
 - Browse 16 original starter objects and local/cloud libraries with search, kind filters, previews, and grid/list views. Save a reusable local object, share an editable `.magiboardobject` package, or explicitly save a version to Databricks through the configured Mac companion.
-- Search imported PDF references, place pages on the canvas, and write over them. Import images and export a region as PNG/PDF or a complete editable notebook.
+- Search imported PDF references, locate chapter exercises through bookmarks and problem labels, place original pages on the canvas, and write over them. Import images and export a region as PNG/PDF or a complete editable notebook.
 
 Settings are organized into Account, Voice & Magic, Canvas, Storage, and About. Drawing works without an AI connection; a small, explicitly labeled offline command set demonstrates common geometry edits and example objects.
 
